@@ -7,13 +7,12 @@
 # --------------------------------------
 process_downscale_GEFS <- function(folder,
                                    noaa_location,
-                                   met_station_location,
-                                   working_glm,
-                                   sim_files_folder,
+                                   input_met_file,
+                                   working_directory,
                                    n_ds_members,
                                    n_met_members,
                                    file_name,
-                                   output_tz,
+                                   local_tzone,
                                    FIT_PARAMETERS,
                                    DOWNSCALE_MET,
                                    met_downscale_uncertainty,
@@ -23,7 +22,10 @@ process_downscale_GEFS <- function(folder,
                                    downscaling_coeff,
                                    full_time_local,
                                    first_obs_date,
-                                   last_obs_date){
+                                   last_obs_date,
+                                   input_met_file_tz,
+                                   weather_uncertainty,
+                                   obs_met_outfile){
   # -----------------------------------
   # 0. Source necessary files
   # -----------------------------------
@@ -40,44 +42,29 @@ process_downscale_GEFS <- function(folder,
   # 1. Load & reformat observational data
   # -----------------------------------
   
-  obs.file.path = paste(met_station_location, "/FCRmet.csv", sep = "")
+  obs.file.path = input_met_file
   for.file.path = noaa_location
   
-  obs.data <- read.csv(obs.file.path, skip = 4, header = F)
-  d_names <- read.csv(obs.file.path, skip = 1, header = T, nrows = 1)
-  names(obs.data) <- names(d_names)
+  obs.data <- read_csv(obs.file.path)
+  
+  obs_met_glm <- read_csv(paste0(working_directory,"/",obs_met_outfile))
+  obs_met_glm$time <- force_tz(obs_met_glm$time, tz = local_tzone)
+  
+  obs.data$timestamp <- force_tz(obs.data$timestamp, tz = local_tzone)
   
   VarNames = as.vector(VarInfo$VarNames)
   
-  maxTempC = 41 # an upper bound of realistic temperature for the study site in deg C
-  minTempC = -24 # an lower bound of realistic temperature for the study site in deg C
   observations <- obs.data %>% 
-    plyr::rename(replaceObsNames) %>%
-    dplyr::mutate(TIMESTAMP = as.character(TIMESTAMP)) %>%
-    dplyr::mutate_at(VarNames, as.numeric) %>%
-    dplyr::mutate(timestamp = as_datetime(TIMESTAMP,
-                                          tz = 'EST5EDT')) %>%
     dplyr::mutate(AirTemp = AirTemp + 273.15,# convert from C to Kelvin
-                  Rain = Rain* 60 * 24/1000) %>% # convert from mm to m
-    dplyr::select(timestamp, VarNames)
-  observations$timestamp <- with_tz(observations$timestamp, output_tz)
-  observations <- observations %>%
-    dplyr::mutate(ShortWave = ifelse(ShortWave < 0, 0, ShortWave),
-                  RelHum = ifelse(RelHum <0, 0, RelHum),
-                  RelHum = ifelse(RelHum > 100, 100, RelHum),
-                  AirTemp = ifelse(AirTemp> 273.15 + maxTempC, NA, AirTemp),
-                  AirTemp = ifelse(AirTemp < 273.15 + minTempC, NA, AirTemp),
-                  LongWave = ifelse(LongWave < 0, NA, LongWave),
-                  WindSpeed = ifelse(WindSpeed <0, 0, WindSpeed)) %>%
-                  filter(is.na(timestamp) == FALSE)
+                  Rain = Rain* 60 * 24/1000)
+    
+  #observations$RelHum <- na.interpolation(observations$RelHum)
+  #observations$AirTemp <- na.interpolation(observations$AirTemp)
+  #observations$LongWave <- na.interpolation(observations$LongWave)
+  #observations$WindSpeed <- na.interpolation(observations$WindSpeed)
 
-  observations$RelHum <- na.interpolation(observations$RelHum)
-  observations$AirTemp <- na.interpolation(observations$AirTemp)
-  observations$LongWave <- na.interpolation(observations$LongWave)
-  observations$WindSpeed <- na.interpolation(observations$WindSpeed)
-  
   rm(obs.data)
-  hrly.obs <- observations %>% aggregate_obs_to_hrly()
+  hrly.obs <- observations #%>% aggregate_obs_to_hrly()
   
   # -----------------------------------
   # 1. Fit Parameters
@@ -87,12 +74,12 @@ process_downscale_GEFS <- function(folder,
     print("Fit Parameters")
     fit_downscaling_parameters(observations,
                                for.file.path = noaa_location,
-                               working_glm,
-                               VarNames = VarNames,
+                               working_directory,
+                               VarNames,
                                VarNamesStates,
-                               replaceObsNames = replaceObsNames,
+                               replaceObsNames,
                                PLOT = FALSE,
-                               output_tz = output_tz,
+                               local_tzone,
                                VarInfo,
                                first_obs_date,
                                last_obs_date)
@@ -100,27 +87,31 @@ process_downscale_GEFS <- function(folder,
   # -----------------------------------
   # 2. Process GEFS
   # -----------------------------------
-  met_forecast_output = process_GEFS(file_name = file_name,
-                       n_ds_members = n_ds_members,
-                       n_met_members = n_met_members,
-                       sim_files_folder = sim_files_folder,
+  met_forecast_output <- process_GEFS(file_name,
+                       n_ds_members,
+                       n_met_members,
                        in_directory = noaa_location,
-                       out_directory = working_glm,
-                       output_tz = output_tz,
-                       VarInfo = VarInfo,
-                       replaceObsNames = replaceObsNames,
+                       out_directory = working_directory,
+                       local_tzone,
+                       VarInfo,
+                       replaceObsNames,
                        hrly.observations = hrly.obs,
-                       DOWNSCALE_MET = DOWNSCALE_MET,
-                       FIT_PARAMETERS = FIT_PARAMETERS,
+                       DOWNSCALE_MET,
+                       FIT_PARAMETERS,
                        met_downscale_uncertainty,
                        WRITE_FILES = TRUE,
-                       downscaling_coeff)
-  files = met_forecast_output[[1]]
-  output = met_forecast_output[[2]]
-  if(compare_output_to_obs == TRUE){
-    "comparing forecast output to obs"
-    compare_output_to_obs(output, hrly.obs)
-  }
+                       downscaling_coeff,
+                       full_time_local,
+                       weather_uncertainty,
+                       obs_met_glm)
+  files <- met_forecast_output[[1]]
+  output <- met_forecast_output[[2]]
+  
+  
+  #if(compare_output_to_obs == TRUE){
+  #  "comparing forecast output to obs"
+  #  compare_output_to_obs(output, hrly.obs)
+  #}
   return(files)
 }
 

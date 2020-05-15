@@ -1,8 +1,19 @@
 #FUNCTIONS Shared between the MCMC and EnKF
 
+
+
 #Set GLM Initial conditions for temperature at each layer from first observations
-update_temps <- function(curr_temps,curr_depths,working_glm){
-  orig_nml = read_nml(paste0(working_glm,'/','glm3.nml'))
+#' Add together two numbers.
+#'
+#' @param x A number.
+#' @param y A number.
+#' @return The sum of \code{x} and \code{y}.
+#' @export
+#' @examples
+#' add(1, 1)
+#' add(10, 1)
+update_temps <- function(curr_temps,curr_depths,working_directory){
+  orig_nml = read_nml(paste0(working_directory,'/','glm3.nml'))
   index1 = NA; index2 = NA;index3 = NA; index4 = NA
   for (g in 1:length(orig_nml)) {
     for (q in 1:length(orig_nml[[g]])) {
@@ -25,15 +36,29 @@ update_temps <- function(curr_temps,curr_depths,working_glm){
   holder3 = unlist(orig_nml[[index3]][index4]) #original depths in nml
   holder3[1:length(holder3)] = depths # original depths in nml
   holder3 = list(holder3)
+<<<<<<< HEAD
   orig_nml[[index1]][index2] = holder2 # updating orig nml temps
   orig_nml[[index3]][index4] = holder3 # updating orig nml depths
   write_nml(orig_nml, paste0(working_glm,'/','glm3.nml')) # write out nml with updated temps / depths
+=======
+  orig_nml[[index1]][index2] = holder2
+  orig_nml[[index3]][index4] = holder3
+  write_nml(orig_nml, paste0(working_directory,'/','glm3.nml'))
+>>>>>>> 077ed23e6ac9d186dc3e559fe512cd41638b2c5f
   return(list(depths,init_temps))
 }
 
-
-update_var <- function(var_value,var_name,working_glm){
-  orig_nml = read_nml(paste0(working_glm,'/','glm3.nml'))
+#' Add together two numbers.
+#'
+#' @param x A number.
+#' @param y A number.
+#' @return The sum of \code{x} and \code{y}.
+#' @export
+#' @examples
+#' add(1, 1)
+#' add(10, 1)
+update_var <- function(var_value,var_name,working_directory, nml){
+  orig_nml = read_nml(paste0(working_directory,'/',nml))
   index1 = NA; index2 = NA
   for (g in 1:length(orig_nml)) {
     for (q in 1:length(orig_nml[[g]])) {
@@ -46,11 +71,41 @@ update_var <- function(var_value,var_name,working_glm){
   holder2[1:length(var_value)] = var_value
   holder2 = list(holder2[1:length(var_value)])
   orig_nml[[index1]][index2] = holder2
-  write_nml(orig_nml, paste0(working_glm,'/','glm3.nml'))
+  write_nml(orig_nml, paste0(working_directory,'/',nml))
 }
 
-update_time <- function(start_value,stop_value,working_glm){
-  orig_nml = read_nml(paste0(working_glm,'/','glm3.nml'))
+update_nml <- function(var_list,var_name_list,working_directory, nml){
+  orig_nml = read_nml(paste0(working_directory,'/',nml))
+  
+  for(k in 1:length(var_list)){
+  index1 = NA; index2 = NA
+  for (g in 1:length(orig_nml)) {
+    for (q in 1:length(orig_nml[[g]])) {
+      if (names(orig_nml[[g]][q]) == var_name_list[k]) {
+        index1 = g; index2 = q; 
+      }
+    }
+  }
+  holder2 = unlist(orig_nml[[index1]][index2])
+  holder2[1:length(var_list[[k]])] = var_list[[k]]
+  holder2 = list(holder2[1:length(var_list[[k]])])
+  orig_nml[[index1]][index2] = holder2
+  }
+  
+  write_nml(orig_nml, paste0(working_directory,'/',nml))
+}
+
+#' Add together two numbers.
+#'
+#' @param x A number.
+#' @param y A number.
+#' @return The sum of \code{x} and \code{y}.
+#' @export
+#' @examples
+#' add(1, 1)
+#' add(10, 1)
+update_time <- function(start_value,stop_value,working_directory){
+  orig_nml = read_nml(paste0(working_directory,'/','glm3.nml'))
   index1 = NA; index2 = NA; index3 = NA; index4 = NA
   for (g in 1:length(orig_nml)) {
     for (q in 1:length(orig_nml[[g]])) {
@@ -65,11 +120,20 @@ update_time <- function(start_value,stop_value,working_glm){
   orig_nml[[index1]][index2] = as.character(start_value)
   orig_nml[[index1]][index2] = as.character(start_value)
   orig_nml[[index3]][index4] = stop_value
-  write_nml(orig_nml, paste0(working_glm,'/','glm3.nml'))
+  write_nml(orig_nml, paste0(working_directory,'/','glm3.nml'))
 }
 
-get_glm_nc_var <- function(ncFile,z_out,var = 'temp'){
-  glm_nc <- nc_open(ncFile)
+#' Add together two numbers.
+#'
+#' @param x A number.
+#' @param y A number.
+#' @return The sum of \code{x} and \code{y}.
+#' @export
+#' @examples
+#' add(1, 1)
+#' add(10, 1)
+get_glm_nc_var <- function(ncFile,working_dir, z_out,var = 'temp'){
+  glm_nc <- nc_open(paste0(working_dir,ncFile))
   tallest_layer <- ncvar_get(glm_nc, "NS")
   elev <- ncvar_get(glm_nc, "z")
   temp <- ncvar_get(glm_nc, var)
@@ -99,12 +163,26 @@ get_glm_nc_var <- function(ncFile,z_out,var = 'temp'){
   return(temps)
 }
 
+#' Add together two numbers.
+#'
+#' @param x A number.
+#' @param y A number.
+#' @return The sum of \code{x} and \code{y}.
+#' @export
+#' @examples
+#' add(1, 1)
+#' add(10, 1)
 update_phyto <- function(p_initial,nml_name = 'aed2_phyto_pars.nml'){
 
   if(length(p_initial)<6){
     print('number of phyto group does not equal 6')
+<<<<<<< HEAD
   }
   nml_file <- paste0(working_glm,'/',nml_name)
+=======
+  }   
+  nml_file <- paste0(working_directory,'/',nml_name)
+>>>>>>> 077ed23e6ac9d186dc3e559fe512cd41638b2c5f
   c <- file(nml_file, "r")
   fileLines <- readLines(c)
   close(c)
@@ -132,9 +210,19 @@ update_phyto <- function(p_initial,nml_name = 'aed2_phyto_pars.nml'){
   sink()
 }
 
-get_glm_nc_var_all_wq <- function(ncFile,z_out,vars){
-  glm_nc <- nc_open(ncFile)
+#' Add together two numbers.
+#'
+#' @param x A number.
+#' @param y A number.
+#' @return The sum of \code{x} and \code{y}.
+#' @export
+#' @examples
+#' add(1, 1)
+#' add(10, 1)
+get_glm_nc_var_all_wq <- function(ncFile,working_dir, z_out,vars){
+  glm_nc <- nc_open(paste0(working_dir,ncFile))
   tallest_layer <- ncvar_get(glm_nc, "NS")
+<<<<<<< HEAD
   elev <- ncvar_get(glm_nc, "z")
   elev_surf = get_surface_height(ncFile)
   max_i <- tallest_layer[length(tallest_layer)]
@@ -160,8 +248,36 @@ get_glm_nc_var_all_wq <- function(ncFile,z_out,vars){
       output[,v] <- approx(x = elevs_re, y = temps_re, xout = elevs_out)$y
     }
 
+=======
+  final_time_step <- length(tallest_layer)
+  tallest_layer <- tallest_layer[final_time_step]
+  heights <- ncvar_get(glm_nc, "z")
+  heights_surf <- heights[tallest_layer,final_time_step]
+  heights <- heights[1:tallest_layer,final_time_step]
+  heights_out <- heights_surf - z_out
+  
+  snow <- ncvar_get(glm_nc, "hsnow")[2]
+  ice_white <- ncvar_get(glm_nc, "hwice")[2] 
+  ice_blue <- ncvar_get(glm_nc, "hice")[2] 
+  avg_surf_temp <- ncvar_get(glm_nc, "avg_surf_temp")[2] 
+  
+  
+  glm_temps <- ncvar_get(glm_nc, "temp")[1:tallest_layer, final_time_step]
+  
+  output <- array(NA,dim=c(tallest_layer,length(vars)))
+  for(v in 1:length(vars)){
+    var_modeled <- ncvar_get(glm_nc, vars[v])
+    output[,v] <- var_modeled[1:tallest_layer, final_time_step]
+>>>>>>> 077ed23e6ac9d186dc3e559fe512cd41638b2c5f
   }
+  
+  mixing_vars <- ncvar_get(glm_nc, "restart_variables")
+  
   nc_close(glm_nc)
   return(list(output = output,
-              surface_height = elev_surf[length(tallest_layer), 2]))
+              surface_height = heights_surf,
+              depths_enkf = rev(heights_surf - heights),
+              snow_wice_bice = c(snow, ice_white, ice_blue),
+              avg_surf_temp = avg_surf_temp,
+              mixing_vars = mixing_vars))
 }

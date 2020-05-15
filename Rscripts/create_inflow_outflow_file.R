@@ -1,96 +1,138 @@
-create_inflow_outflow_file <- function(full_time_day,
-                                       working_glm,
-                                       input_tz = 'EST5EDT', 
-                                       output_tz = reference_tzone, 
+create_inflow_outflow_file <- function(full_time_local,
+                                       working_directory,
+                                       input_file_tz = 'EST5EDT', 
                                        start_forecast_step,
-                                       hold_inflow_outflow_constant,
                                        inflow_file1,
                                        inflow_file2,
-                                       outflow_file1){
+                                       outflow_file1,
+                                       chemistry_file,
+                                       local_tzone,
+                                       met_file_names,
+                                       forecast_days,
+                                       inflow_process_uncertainty,
+                                       future_inflow_flow_coeff,
+                                       future_inflow_flow_error,
+                                       future_inflow_temp_coeff,
+                                       future_inflow_temp_error)
+{
   
-  full_time_day_2017 <- as.POSIXct(full_time_day,
-                                   tz = reference_tzone) - 365*24*60*60
-  full_time_day_2016 <- as.POSIXct(full_time_day,
-                                   tz = reference_tzone) - 2*365*24*60*60
-  full_time_day_2015 <- as.POSIXct(full_time_day, 
-                                   tz = reference_tzone) - 3*365*24*60*60
-  full_time_day_2014 <- as.POSIXct(full_time_day, 
-                                   tz = reference_tzone) - 4*365*24*60*60
-  full_time_day_2015 <- as.POSIXct(full_time_day, 
-                                   tz = reference_tzone) - 5*365*24*60*60
+  full_time_day_local <- as_date(full_time_local)
   
-  inflow = read.csv(paste0(working_glm,'/', inflow_file1))
-  spillway = read.csv(paste0(working_glm,'/', outflow_file1))
-  wetland = read.csv(paste0(working_glm,'/', inflow_file2))
+  inflow <- read_csv(inflow_file1)
+  if(!is.na(inflow_file2)){
+    wetland <- read_csv(inflow_file2)
+  }
   
-  inflow_time_local <- as.POSIXct(inflow$time, tz = reference_tzone)
-  inflow$time <- with_tz(inflow_time_local,reference_tzone)
+  if(include_wq){
+    wq_names_tmp <- wq_names[which(wq_names %in% names(inflow))]
+  }else{
+    wq_names_tmp <- NULL
+  }
   
-  spillway_time_local <- as.POSIXct(spillway$time, tz = reference_tzone)
-  spillway$time <- with_tz(spillway_time_local,reference_tzone)
+  curr_all_days <- NULL
   
-  wetland_time_local <- as.POSIXct(wetland$time, tz = reference_tzone)
-  wetland$time <- with_tz(wetland_time_local,reference_tzone)
+  col_types <- cols(
+    time = col_datetime(format = ""),
+    ShortWave = col_double(),
+    LongWave = col_double(),
+    AirTemp = col_double(),
+    RelHum = col_double(),
+    WindSpeed = col_double(),
+    Rain = col_double(),
+    Snow = col_double())
   
-  inflow_2017 =  inflow[which(inflow$time %in% full_time_day_2017),]
-  inflow_2016 =  inflow[which(inflow$time %in% full_time_day_2016),]
-  inflow_2015 =  inflow[which(inflow$time %in% full_time_day_2015),]
-  inflow_2014 =  inflow[which(inflow$time %in% full_time_day_2014),]
-  inflow_2013 =  inflow[which(inflow$time %in% full_time_day_2015),]
-  inflow_new = inflow_2014
+  for(m in 1:length(met_file_names)){
+    curr_met_daily <- read_csv(paste0(working_directory,"/",met_file_names[m]),
+                               col_types = col_types) %>% 
+      mutate(time = as_date(time)) %>% 
+      group_by(time) %>% 
+      summarize(Rain = mean(Rain),
+                AirTemp = mean(AirTemp)) %>% 
+      mutate(ensemble = m) %>% 
+      mutate(AirTemp_lag1 = lag(AirTemp, 1),
+             Rain_lag1 = lag(Rain, 1))
+    
+    curr_all_days <- rbind(curr_all_days,curr_met_daily)
+  }
   
-  spillway_2017 =  spillway[which(spillway$time %in% full_time_day_2017),]
-  spillway_2016 =  spillway[which(spillway$time %in% full_time_day_2016),]
-  spillway_2015 =  spillway[which(spillway$time %in% full_time_day_2015),]
-  spillway_2014 =  spillway[which(spillway$time %in% full_time_day_2014),]
-  spillway_2013 =  spillway[which(spillway$time %in% full_time_day_2015),]
-  spillway_new = spillway_2017
   
-  wetland_2017 =  wetland[which(wetland$time %in% full_time_day_2017),]
-  wetland_2016 =  wetland[which(wetland$time %in% full_time_day_2016),]
-  wetland_2015 =  wetland[which(wetland$time %in% full_time_day_2015),]
-  wetland_2014 =  wetland[which(wetland$time %in% full_time_day_2014),]
-  wetland_2013 =  wetland[which(wetland$time %in% full_time_day_2015),]
-  wetland_new = wetland_2017
+  tmp <- left_join(curr_all_days, inflow, by = "time")
   
-  for(i in 1:length(full_time_day)){
-    curr_day <- day(full_time_day[i])
-    curr_month <- month(full_time_day[i])
-    index1 <- which(day(inflow$time) == curr_day & month(inflow$time) == curr_month)
-    index2 <- which(day(spillway$time) == curr_day & month(spillway$time) == curr_month)
-    if(i < (start_forecast_step+1)){
-      hist_index1 <- index1
-      hist_index2 <- index2
+  forecasts_days <- full_time_day_local[start_forecast_step:length(full_time_day_local)]
+  if(use_future_inflow == FALSE || start_forecast_step == length(full_time_day_local)){
+    forecasts_days <- NULL 
+  }
+  
+  tmp <- tmp %>%
+    mutate(forecast = ifelse(time %in% forecasts_days, 1, 0),
+           TEMP = ifelse(forecast == 1, NA, TEMP),
+           FLOW = ifelse(forecast == 1, NA, FLOW))
+  
+  if(inflow_process_uncertainty == TRUE){
+    inflow_error <- rnorm(nrow(tmp), 0, future_inflow_flow_error)
+    temp_error <- rnorm(nrow(tmp), 0, future_inflow_temp_error)
+  }else{
+    inflow_error <- rep(0.0, nrow(tmp))
+    temp_error <- rep(0.0, nrow(tmp))
+  }
+  
+  for(i in 1:nrow(tmp)){
+    if(tmp$forecast[i] == 0 & is.na(tmp$FLOW[i]) & !include_wq){
+      tmp[i, c("FLOW", "TEMP",wq_names_tmp)]  <- inflow %>% 
+        filter(time < full_time_day_local[start_forecast_step]) %>% 
+        mutate(doy = yday(time)) %>% 
+        filter(doy == yday(tmp$time[i])) %>% 
+        summarize_at(.vars = c("FLOW", "TEMP", wq_names_tmp), mean, na.rm = TRUE) %>% 
+        unlist()
     }
-    if(i < (start_forecast_step+1) & hold_inflow_outflow_constant){
-      for(j in 2:15){
-        inflow_new[i,j] <- mean(inflow[index1,j], na.rm = TRUE)
-        wetland_new[i,j] <- mean(wetland[index1,j], na.rm = TRUE)
+    
+    if(tmp$forecast[i] == 1){
+      tmp$FLOW[i] = future_inflow_flow_coeff[1] + 
+        future_inflow_flow_coeff[2] * tmp$FLOW[i - 1] +  
+        future_inflow_flow_coeff[3] * tmp$Rain_lag1[i] + inflow_error[i]
+      tmp$TEMP[i] = future_inflow_temp_coeff[1] +  
+        future_inflow_temp_coeff[2] * tmp$TEMP[i-1] +  
+        future_inflow_temp_coeff[3] * tmp$AirTemp_lag1[i] + temp_error[i]
+      if(include_wq){
+        tmp[i, c(wq_names_tmp)] <- inflow %>% 
+          filter(time < full_time_day_local[start_forecast_step]) %>% 
+          mutate(doy = yday(time)) %>% 
+          filter(doy == yday(tmp$time[i])) %>% 
+          summarize_at(.vars = c(wq_names_tmp), mean, na.rm = TRUE) %>% 
+          unlist()
       }
-      spillway_new[i,2] <- mean(spillway[index2,2])
-    }else{
-      for(j in 2:15){
-        inflow_new[i,j] <- mean(inflow[hist_index1,j])
-        wetland_new[i,j] <- mean(wetland[hist_index1,j], na.rm = TRUE)
-      }
-      spillway_new[i,2] <- mean(spillway[hist_index2,2], na.rm = TRUE) 
     }
   }
   
-  inflow_new$time =  full_time_day
-  spillway_new$time =  full_time_day
-  wetland_new$time =  full_time_day
+  tmp <- tmp %>% 
+    mutate(FLOW = ifelse(FLOW < 0.0, 0.0, FLOW))
   
-  write.csv(inflow_new,
-            file = paste0(working_glm,'/','inflow_file1.csv'),
-            row.names = FALSE,
-            quote = FALSE)
-  write.csv(spillway_new,
-            file = paste0(working_glm,'/','outflow_file1.csv'),
-            row.names = FALSE,
-            quote = FALSE)
-  write.csv(wetland_new,
-            file = paste0(working_glm,'/','inflow_file2.csv'),
-            row.names = FALSE,
-            quote = FALSE)
+  file_name_base <- met_file_names %>% 
+    str_sub(4) 
+  inflow1_file_names <- paste0("inflow", file_name_base)
+  outflow_file_names <- paste0("outflow", file_name_base)
+  
+  for(i in 1:n_distinct(tmp$ensemble)){
+    tmp2 <- tmp %>% 
+      filter(ensemble == i) %>% 
+      mutate(SALT = 0.0) %>% 
+      select(time, FLOW, TEMP, SALT, all_of(wq_names_tmp)) %>% 
+      mutate_at(vars(c("FLOW", "TEMP", "SALT", all_of(wq_names_tmp))), funs(round(., 4)))
+    
+    
+    write_csv(x = tmp2,
+              path = paste0(working_directory,"/",inflow1_file_names[i]),
+              quote_escape = "none")
+    
+    tmp2 <- tmp2 %>% 
+      select(time, FLOW)
+    
+    write_csv(x = tmp2,
+              path = paste0(working_directory,"/",outflow_file_names[i]),
+              quote_escape = "none")
+  }
+  
+  return(list(inflow_file_names = as.character(inflow1_file_names),
+              spillway_file_names = as.character(outflow_file_names),
+              wetland_file_names = as.character(inflow1_file_names)))
 }

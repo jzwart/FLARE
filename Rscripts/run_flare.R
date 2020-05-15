@@ -6,57 +6,51 @@
 #          observations                                    #
 # ---------------------------------------------------------#
 
-run_flare<-function(start_day= "2018-07-06 00:00:00",
-                            sim_name = NA, 
-                            hist_days = 1,
-                            forecast_days = 16,  
-                            spin_up_days = 0,
-                            restart_file = NA,
-                            folder, 
-                            forecast_location = NA,
-                            push_to_git = FALSE,
-                            pull_from_git = TRUE, 
-                            data_location = NA, 
-                            n_enkf_members = NA,
-                            n_ds_members = 50,
-                            include_wq = FALSE,
-                            use_ctd = use_ctd,
-                            uncert_mode = 1,
-                            reference_tzone,
-                            cov_matrix = NA,
-                            downscaling_coeff = NA,
-                            GLMversion,
-                            DOWNSCALE_MET = TRUE,
-                            FLAREversion,
-                            met_ds_obs_start,
-                            met_ds_obs_end){
+#' Short Description.
+#'
+#' @param x A number.
+#' @param y A number.
+#' @return The sum of \code{x} and \code{y}.
+#' @export
+#' @examples
+#' add(1, 1)
+#' add(10, 1)
+
+run_flare<-function(start_day_local,
+                    start_time_local,
+                    forecast_start_day_local,
+                    sim_name = NA, 
+                    hist_days = 1,
+                    forecast_days = 16,  
+                    spin_up_days = 0,
+                    restart_file = NA,
+                    uncert_mode = 1,
+                    forecast_sss_on){
   
   #################################################
-  ### LOAD R FUNCTIONS
+  ### LOAD R FUNCTIONS AND OTHER INITIAL SET UP
   #################################################
   
-  source(paste0(folder,"/","Rscripts/edit_nml_functions.R"))
-  source(paste0(folder,"/","Rscripts/create_obs_met_input.R"))
-  source(paste0(folder,"/","Rscripts/extract_temp_chain.R"))
-  source(paste0(folder,"/","Rscripts/process_GEFS2GLM.R"))
-  source(paste0(folder,"/","Rscripts/extract_temp_CTD.R"))
-  source(paste0(folder,"/","Rscripts/create_inflow_outflow_file.R"))
-  source(paste0(folder,"/","Rscripts/archive_forecast.R"))
-  source(paste0(folder,"/","Rscripts/write_forecast_netcdf.R")) 
-  source(paste0(folder,"/","Rscripts/run_EnKF.R")) 
-  source(paste0(folder,"/","Rscripts/met_downscale/process_downscale_GEFS.R")) 
-  source(paste0(folder,"/","Rscripts/update_qt.R"))
+  source(paste0(code_folder,"/","Rscripts/edit_nml_functions.R"))
+  source(paste0(code_folder,"/","Rscripts/archive_forecast.R"))
+  source(paste0(code_folder,"/","Rscripts/write_forecast_netcdf.R")) 
+  source(paste0(code_folder,"/","Rscripts/run_EnKF.R")) 
+  source(paste0(code_folder,"/","Rscripts/met_downscale/process_downscale_GEFS.R")) 
+  source(paste0(code_folder,"/","Rscripts/update_qt.R"))
+  source(paste0(code_folder,"/","Rscripts/glmtools.R"))
+  source(paste0(code_folder,"/","Rscripts/localization.R")) 
+  source(paste0(code_folder,"/","Rscripts/temperature_to_density.R"))
+  source(paste0(code_folder,"/","Rscripts/extract_observations.R"))
+  source(paste0(code_folder,"/","Rscripts/create_obs_met_input.R"))
+  source(paste0(code_folder,"/","Rscripts/create_sss_input_output.R"))
+  source(paste0(code_folder,"/","Rscripts/create_inflow_outflow_file.R"))
+  source(paste0(code_folder,"/","Rscripts/read_sss_files.R"))
   
-  #################################################
-  ### CONFIGURATIONS THAT NEED TO BE GENERALIZED
-  #################################################
+  source(paste0(code_folder,"/","Rscripts/",lake_name,"/in_situ_qaqc.R"))  
+  source(paste0(code_folder,"/","Rscripts/",lake_name,"/met_qaqc.R")) 
+  source(paste0(code_folder,"/","Rscripts/",lake_name,"/inflow_qaqc.R"))  
   
-  ###RUN OPTIONS
-  npars <- 4
-  pre_scc <- FALSE
-  hold_inflow_outflow_constant <- FALSE
-  print_glm2screen <- TRUE
-  
+
   ### METEROLOGY DOWNSCALING OPTIONS
   if(is.na(downscaling_coeff)){
     FIT_PARAMETERS <- TRUE
@@ -68,115 +62,8 @@ run_flare<-function(start_day= "2018-07-06 00:00:00",
     FIT_PARAMETERS <- FALSE
   }
   
-  
-  #Estimated parameters
-  lake_depth_init <- 9.4  #not a modeled state
-  zone2_temp_init_mean <- 17 #11
-  zone2_temp_init_lowerbound <- 5
-  zone2_temp_init_upperbound <- 20
-  zone1_temp_init_mean <- 11
-  zone1_temp_init_lowerbound <- 5
-  zone1_temp_init_upperbound <- 20
-    
-  zone1temp_init_qt <- 0.01^2 #THIS IS THE VARIANCE, NOT THE SD
-  zone2temp_init_qt <- 0.00000001^2 #THIS IS THE VARIANCE, NOT THE SD
-  
-  swf_init_mean <- 0.75
-  swf_init_lowerbound <- 0.50
-  swf_init_upperbound <- 1.0
-  swf_init_qt <- 0.001^2 #THIS IS THE VARIANCE, NOT THE SD
-  kw_init <- 0.87  #use 0.15 if running AED
-  kw_init_qt <- 0.000000001^2
-  
-  obs_error <- 0.0001 #NEED TO DOUBLE CHECK
-  
-  #Define modeled depths and depths with observations
-  modeled_depths <- c(0.1, 0.33, 0.66, 
-                      1.00, 1.33, 1.66,
-                      2.00, 2.33, 2.66,
-                      3.0, 3.33, 3.66,
-                      4.0, 4.33, 4.66,
-                      5.0, 5.33, 5.66,
-                      6.0, 6.33, 6.66,
-                      7.00, 7.33, 7.66,
-                      8.0, 8.33, 8.66,
-                      9.00, 9.33)
-  
-  observed_depths_temp <- c(0.1, 1, 2, 3, 4, 5, 6, 7, 8, 9)
-  observed_depths_do <- c(1, 5, 9)
-  observed_depths_chla_fdom <- 1
-  
-  temp_obs_fname <- "Catwalk.csv"
-  met_obs_fname <- "FCRmet.csv"
-  
-  inflow_file1 <- "FCR_weir_inflow_newEDI_2013_2017_20190128_allfractions.csv"
-  outflow_file1 <- "FCR_spillway_outflow_newEDI_SUMMED_WeirWetland_2013_2017_20190128.csv"
-  inflow_file2 <- "FCR_wetland_inflow_newEDI_2013_2017_20190305_allfractions.csv"
-  
-  #define water quality variables modeled.  Not used if include_wq == FALSE
-  wq_names <- c("OXY_oxy",
-                "CAR_pH",
-                "CAR_dic",
-                "CAR_ch4",
-                "SIL_rsi",
-                "NIT_amm",
-                "NIT_nit",
-                "PHS_frp",
-                "OGM_doc",
-                "OGM_poc",
-                "OGM_don",
-                "OGM_pon",
-                "OGM_dop",
-                "OGM_pop",
-                "PHY_CYANOPCH1",
-                "PHY_CYANONPCH2",
-                "PHY_CHLOROPCH3",
-                "PHY_DIATOMPCH4"
-                #"ZOO_COPEPODS1",
-                #"ZOO_DAPHNIABIG2",
-                #"ZOO_DAPHNIASMALL3"
-                )
-  
-  local_tzone <- "EST5EDT"
-  
-  # SET UP NUMBER OF ENSEMBLE MEMBERS
-  n_met_members <- 21
-  
   #################################################
-  ### STEP 1: GRAB DATA FROM REPO OR SERVER
-  #################################################
-  
-  temperature_location <- paste0(data_location, "/", "mia-data")
-  met_station_location <- paste0(data_location, "/", "carina-data")
-  noaa_location <- paste0(data_location, "/", "noaa-data")
-  if(pull_from_git){
-    
-    if(!file.exists(temperature_location)){
-      setwd(data_location)
-      system("git clone -b mia-data --single-branch https://github.com/CareyLabVT/SCCData.git mia-data")
-    }
-    if(!file.exists(met_station_location)){
-      setwd(data_location)
-      system("git clone -b carina-data --single-branch https://github.com/CareyLabVT/SCCData.git carina-data")
-    }
-    if(!file.exists(noaa_location)){
-      setwd(data_location)
-      system("git clone -b noaa-data --single-branch https://github.com/CareyLabVT/SCCData.git noaa-data")
-    }
-    
-    setwd(temperature_location)
-    system(paste0("git pull"))
-    
-    setwd(met_station_location)
-    system(paste0("git pull"))
-    
-    setwd(noaa_location)
-    system(paste0("git pull"))
-  }
-  
-  
-  #################################################
-  ### OPTIONS TO ISOLATE COMPONENTS OF uncertainty
+  ### OPTIONS TO ISOLATE COMPONENTS OF UNCERTAINTY
   #################################################
   
   if(uncert_mode == 1){
@@ -189,6 +76,7 @@ run_flare<-function(start_day= "2018-07-06 00:00:00",
     initial_condition_uncertainty <- TRUE
     parameter_uncertainty <- TRUE
     met_downscale_uncertainty <- TRUE
+    inflow_process_uncertainty <- TRUE
   }else if(uncert_mode == 2){
     #No sources of uncertainty  data used to constrain 
     use_obs_constraint <- TRUE
@@ -199,6 +87,7 @@ run_flare<-function(start_day= "2018-07-06 00:00:00",
     initial_condition_uncertainty <- FALSE
     parameter_uncertainty <- FALSE
     met_downscale_uncertainty <- FALSE
+    inflow_process_uncertainty <- FALSE
   }else if(uncert_mode == 3){
     #Only process uncertainty
     use_obs_constraint <- TRUE
@@ -209,6 +98,7 @@ run_flare<-function(start_day= "2018-07-06 00:00:00",
     initial_condition_uncertainty <- FALSE
     parameter_uncertainty <- FALSE
     met_downscale_uncertainty <- FALSE
+    inflow_process_uncertainty <- FALSE
   }else if(uncert_mode == 4){
     #only noaa weather uncertainty
     use_obs_constraint <- TRUE
@@ -219,6 +109,7 @@ run_flare<-function(start_day= "2018-07-06 00:00:00",
     initial_condition_uncertainty <- FALSE
     parameter_uncertainty <- FALSE
     met_downscale_uncertainty <- FALSE
+    inflow_process_uncertainty <- FALSE
   }else if(uncert_mode == 5){
     #only initial condition uncertainty with data constraint
     use_obs_constraint <- TRUE
@@ -229,6 +120,7 @@ run_flare<-function(start_day= "2018-07-06 00:00:00",
     initial_condition_uncertainty <- TRUE
     parameter_uncertainty <- FALSE
     met_downscale_uncertainty <- FALSE
+    inflow_process_uncertainty <- FALSE
   }else if(uncert_mode == 6){
     #only initial condition uncertainty without data constraint
     use_obs_constraint <- FALSE
@@ -239,6 +131,7 @@ run_flare<-function(start_day= "2018-07-06 00:00:00",
     initial_condition_uncertainty <- TRUE
     parameter_uncertainty <- FALSE
     met_downscale_uncertainty <- FALSE
+    inflow_process_uncertainty <- FALSE
   }else if(uncert_mode == 7){
     #only parameter uncertainty
     use_obs_constraint <- TRUE
@@ -249,6 +142,7 @@ run_flare<-function(start_day= "2018-07-06 00:00:00",
     initial_condition_uncertainty <- FALSE
     parameter_uncertainty <- TRUE
     met_downscale_uncertainty <- FALSE
+    inflow_process_uncertainty <- FALSE
   }else if(uncert_mode == 8){
     #only met downscale uncertainty
     use_obs_constraint <- TRUE
@@ -259,6 +153,7 @@ run_flare<-function(start_day= "2018-07-06 00:00:00",
     initial_condition_uncertainty <- FALSE
     parameter_uncertainty <- FALSE
     met_downscale_uncertainty <- TRUE
+    inflow_process_uncertainty <- FALSE
   }else if(uncert_mode == 9){
     #No sources of uncertainty and no data used to constrain 
     use_obs_constraint <- FALSE
@@ -269,25 +164,58 @@ run_flare<-function(start_day= "2018-07-06 00:00:00",
     initial_condition_uncertainty <- FALSE
     parameter_uncertainty <- FALSE
     met_downscale_uncertainty <- FALSE
+    inflow_process_uncertainty <- FALSE
+  }else if(uncert_mode == 10){
+    #Only inflow uncertainty
+    use_obs_constraint <- TRUE
+    #SOURCES OF uncertainty
+    observation_uncertainty <- TRUE
+    process_uncertainty <- FALSE
+    weather_uncertainty <- FALSE
+    initial_condition_uncertainty <- FALSE
+    parameter_uncertainty <- FALSE
+    met_downscale_uncertainty <- FALSE
+    inflow_process_uncertainty <- TRUE
+  }else if(uncert_mode == 11){
+    #All sources of uncertainty and data used to constrain 
+    use_obs_constraint <- FALSE
+    #SOURCES OF uncertainty
+    observation_uncertainty <- TRUE
+    process_uncertainty <- TRUE
+    weather_uncertainty <- TRUE
+    initial_condition_uncertainty <- TRUE
+    parameter_uncertainty <- TRUE
+    met_downscale_uncertainty <- TRUE
+    inflow_process_uncertainty <- TRUE
   }
-  
   
   if(observation_uncertainty == FALSE){
-    obs_error <- 0.000001
+    obs_error_temperature <- 0.000001
   }
   
-  #use_obs_constraint <- TRUE
-  
+  if(single_run){
+    #No sources of uncertainty and no data used to constrain 
+    use_obs_constraint <- FALSE
+    #SOURCES OF uncertainty
+    observation_uncertainty <- FALSE
+    process_uncertainty <- FALSE
+    weather_uncertainty <- FALSE
+    initial_condition_uncertainty <- FALSE
+    parameter_uncertainty <- FALSE
+    met_downscale_uncertainty <- FALSE
+    inflow_process_uncertainty <- FALSE
+    spin_up_days <- hist_days + 2
+    n_enkf_members <- 3
+  }
+
   ####################################################
-  #### STEP 2: DETECT PLATFORM  
+  #### DETECT PLATFORM  
   ####################################################
   
   switch(Sys.info() [["sysname"]],
          Linux = { machine <- "unix" },
          Darwin = { machine <- "mac" },
          Windows = { machine <- "windows"})
-  
-  ###INSTALL PREREQUISITES##
   
   #INSTALL libnetcdf
   if(machine == "unix") {
@@ -296,112 +224,247 @@ run_flare<-function(start_day= "2018-07-06 00:00:00",
   }
   
   ####################################################
-  #### STEP 3: CREATE TIME VECTORS
+  #### STEP 1: CREATE TIME VECTORS
   ####################################################
   
-  # The simulations are run from 00:00:00 GMT time 
-  # so that they directly interface with the NOAA forecast
-  # The output is converted back to local time before being saved
-  
-  begin_sim  <- as_datetime(start_day,tz = reference_tzone)
   total_days <- hist_days + forecast_days
-  end_sim <- begin_sim + total_days*24*60*60
-  start_forecast_step <- hist_days
-  forecast_start_time <- begin_sim + (start_forecast_step)*24*60*60
-  if(day(forecast_start_time) < 10){
-    forecast_day <- paste0("0", day(forecast_start_time))
-  }else{
-    forecast_day <- paste0(day(forecast_start_time))
-  }
-  if(month(forecast_start_time) < 10){
-    forecast_month <- paste0("0", month(forecast_start_time))
-  }else{
-    forecast_month <- paste0(month(forecast_start_time))
-  }
-  full_time <- seq(begin_sim, end_sim, by = "1 day")
-  full_time_local <- with_tz(full_time, tzone = local_tzone)
-  full_time <- strftime(full_time, 
-                        format="%Y-%m-%d %H:%M",
-                        tz = reference_tzone)
-  full_time_local <- strftime(full_time_local,
-                              format="%Y-%m-%d %H:%M",
-                              tz = local_tzone)
-  full_time_day <- strftime(full_time,
-                            format="%Y-%m-%d",
-                            tz = reference_tzone)
-  full_time_day_local <- strftime(full_time_local,
-                                  format="%Y-%m-%d",
-                                  tz = local_tzone)
-  full_time_hour_obs <- seq(as.POSIXct(full_time[1],
-                                       tz = reference_tzone), 
-                            as.POSIXct(full_time[length(full_time)],
-                                       tz = reference_tzone),
-                            by = "1 hour")
+  start_forecast_step <- hist_days + 1
   
+  start_datetime_local <- as_datetime(paste0(start_day_local," ",start_time_local), tz = local_tzone)
+  end_datetime_local <- start_datetime_local + total_days*24*60*60
+  forecast_start_time_local <- start_datetime_local + hist_days*24*60*60
   
+  full_time_local <- seq(start_datetime_local, end_datetime_local, by = "1 day")
+
   ####################################################
-  #### STEP 4: SET ARRAY LENGTHS
+  #### STEP 2: SET ARRAY DIMENSIONS
   ####################################################
   
-  nsteps <- length(full_time)
+  nsteps <- length(full_time_local)
+  if(spin_up_days > nsteps){
+    spin_up_days <- nsteps
+  }
+  
   ndepths_modeled <- length(modeled_depths)
-  num_wq_vars <- length(wq_names) 
-  glm_output_vars <- c("temp", wq_names)
+  num_wq_vars <- length(wq_names)
+  if(include_wq){
+    glm_output_vars <- c("temp", wq_names)
+  }else{
+    glm_output_vars <- "temp"
+  }
+  npars <- length(par_names)
+  
+  n_met_members <- 21
+  # SET UP NUMBER OF ENSEMBLE MEMBERS
+  if(forecast_days > 0 & (ensemble_size %% (n_met_members * n_ds_members)) != 0){
+    stop(paste0("ensemble_size (",ensemble_size,") is not a multiple of the number of
+                n_met_members (",n_met_members,
+                ") * n_ds_members (",n_ds_members,")"))
+  }
+
+  if(single_run){
+    n_met_members <- 3
+    n_ds_members <- 1
+  }
+  
+  if(include_wq){
+    nstates <- ndepths_modeled*(1+num_wq_vars)
+  }else{
+    nstates <- ndepths_modeled
+  }
+  
+  num_phytos <- length(tchla_components_vars)
   
   ####################################################
-  #### STEP 5: ORGANIZE FILES
+  #### STEP 3: ORGANIZE FILES
   ####################################################
   
   ###CREATE DIRECTORY PATHS AND STRUCTURE
-  working_glm <- paste0(folder, "/", "GLM_working")  
+  working_directory <- paste0(execute_location, "/", "working_directory")
+  if(!dir.exists(working_directory)){
+    dir.create(working_directory, showWarnings = FALSE)
+  }
   ####Clear out temp GLM working directory
-  unlink(paste0(working_glm, "/*"), recursive = FALSE)    
-  forecast_base_name <- paste0(year(forecast_start_time),
-                               forecast_month,
-                               forecast_day,
-                               "gep_all_00z")
-  temp_obs_fname_wdir <-  paste0(working_glm, "/", temp_obs_fname)
-  met_obs_fname_wdir <-paste0(met_station_location, "/", met_obs_fname)
-  met_forecast_base_file_name <- paste0("met_hourly_",
-                                        forecast_base_name,
-                                        "_ens")
+  unlink(paste0(working_directory, "/*"), recursive = FALSE)   
+  
+  
   if(is.na(sim_name)){
     sim_name <- paste0(year(full_time_local[1]), "_",
                        month(full_time_local[1]), "_",
                        day(full_time_local[1]))
   }
   
+  #if(!is.na(restart_file)){
+  #  tmp <- file.copy(from = restart_file, to = working_directory, overwrite = TRUE)
+  #}
+  
   ####################################################
-  #### STEP 6: PROCESS AND ORGANIZE DATA
+  #### STEP 4: PROCESS RAW INPUT AND OBSERVATION DATA
   ####################################################
   
-  ###CREATE HISTORICAL MET FILE
-  if(met_downscale_uncertainty == FALSE){
-    n_ds_members <- 1
+  #### START QAQC CONTAINER ####
+  
+  if(pull_from_git){
+    
+    if(!file.exists(realtime_insitu_location)){
+      stop("Missing temperature data GitHub repo")
+    }
+    if(!file.exists(realtime_met_station_location)){
+      stop("Missing met station data GitHub repo")
+    }
+    if(!file.exists(noaa_location)){
+      stop("Missing NOAA forecast GitHub repo")
+    }
+    if(!file.exists(manual_data_location)){
+      stop("Missing Manual data GitHub repo")
+    }
+    
+    if(!file.exists(realtime_inflow_data_location)){
+      stop("Missing Inflow data GitHub repo")
+    }
+    
+    setwd(realtime_insitu_location)
+    system(paste0("git pull"))
+    
+    setwd(realtime_met_station_location)
+    system(paste0("git pull"))
+    
+    setwd(noaa_location)
+    system(paste0("git pull"))
+    
+    setwd(manual_data_location)
+    system(paste0("git pull"))
+    
+    setwd(realtime_inflow_data_location)
+    system(paste0("git pull"))
+  
   }
   
+  cleaned_met_file <- paste0(working_directory, "/met_full_postQAQC.csv")
+  met_qaqc(realtime_file = met_obs_fname[1],
+           qaqc_file = met_obs_fname[2],
+           cleaned_met_file,
+           input_file_tz = "EST",
+           local_tzone,
+           full_time_local)
   
-  met_file_names <- rep(NA, 1+(n_met_members*n_ds_members))
-  obs_met_outfile <- paste0(working_glm, "/", "GLM_met.csv")
-  create_obs_met_input(fname = met_obs_fname_wdir,
-                       outfile=obs_met_outfile,
-                       full_time_hour_obs, 
-                       input_tz = "EST5EDT", 
-                       output_tz = reference_tzone)
-  met_file_names[1] <- obs_met_outfile
+  cleaned_inflow_file <- paste0(working_directory, "/inflow_postQAQC.csv")
   
-  ###CREATE FUTURE MET FILES
-  if(forecast_days > 0){
+  inflow_qaqc(realtime_file = inflow_file1[1],
+              qaqc_file = inflow_file1[2],
+              nutrients_file = nutrients_fname,
+              cleaned_inflow_file ,
+              local_tzone, 
+              input_file_tz = 'EST')
+  
+  cleaned_observations_file_long <- paste0(working_directory, 
+                                           "/observations_postQAQC_long.csv")
+  
+  in_situ_qaqc(insitu_obs_fname = insitu_obs_fname, 
+               data_location = data_location, 
+               maintenance_file = maintenance_file,
+               ctd_fname = ctd_fname, 
+               nutrients_fname = nutrients_fname,
+               cleaned_observations_file_long = cleaned_observations_file_long,
+               lake_name,
+               code_folder)
+  
+  #### END QAQC CONTAINER ####
+  
+  ####################################################
+  #### STEP 5: PROCESS DRIVER DATA INTO MODEL FORMAT
+  ####################################################
+  
+  #### START DRIVER CONTAINER ####
+  
+  ### All of this is for working with the NOAA data #####
+  start_datetime_GMT <- with_tz(first(full_time_local), tzone = "GMT")
+  end_datetime_GMT <- with_tz(last(full_time_local), tzone = "GMT")
+  forecast_start_time_GMT<- with_tz(forecast_start_time_local, tzone = "GMT")
+  
+  forecast_start_time_GMT_past <- forecast_start_time_GMT - days(1)
+  
+  noaa_hour <- NA
+  if(!hour(forecast_start_time_GMT) %in% c(0,6,12,18) & forecast_days > 0){
+    stop(paste0("local_start_datetime of ", local_start_datetime," does not have a corresponding GMT time with a NOAA forecast
+                The GMT times that are avialable are 00:00:00, 06:00:00, 12:00:00, and 18:00:00"))
+  }else{
+    if(hour(forecast_start_time_GMT) == 0){
+      noaa_hour <- "00"
+    }
+    if(hour(forecast_start_time_GMT) == 6){
+      noaa_hour <- "06"
+    }
+    if(hour(forecast_start_time_GMT) == 12){
+      noaa_hour <- "12"
+    }
+    if(hour(forecast_start_time_GMT) == 18){
+      noaa_hour <- "18"
+    }
+  }
+  
+  if(day(forecast_start_time_GMT) < 10){
+    forecast_day_GMT <- paste0("0", day(forecast_start_time_GMT))
+  }else{
+    forecast_day_GMT <- paste0(day(forecast_start_time_GMT))
+  }
+  if(month(forecast_start_time_GMT) < 10){
+    forecast_month_GMT <- paste0("0", month(forecast_start_time_GMT))
+  }else{
+    forecast_month_GMT <- paste0(month(forecast_start_time_GMT))
+  }
+  
+  if(day(forecast_start_time_GMT_past) < 10){
+    forecast_day_GMT_past <- paste0("0", day(forecast_start_time_GMT_past))
+  }else{
+    forecast_day_GMT_past <- paste0(day(forecast_start_time_GMT_past))
+  }
+  if(month(forecast_start_time_GMT_past) < 10){
+    forecast_month_GMT_past <- paste0("0", month(forecast_start_time_GMT_past))
+  }else{
+    forecast_month_GMT_past <- paste0(month(forecast_start_time_GMT_past))
+  }
+  
+  forecast_base_name <- paste0(lake_name,"_",
+                               year(forecast_start_time_GMT),
+                               forecast_month_GMT,
+                               forecast_day_GMT,"_",
+                               "gep_all_",
+                               noaa_hour,
+                               "z")
+  
+  forecast_base_name_past <- paste0(lake_name,"_",
+                                    year(forecast_start_time_GMT_past),
+                                    forecast_month_GMT_past,
+                                    forecast_day_GMT_past,"_",
+                                    "gep_all_",
+                                    noaa_hour,
+                                    "z")
+  
+  met_forecast_base_file_name <- paste0("met_hourly_",
+                                        forecast_base_name,
+                                        "_ens")
+
+  met_file_names <- rep(NA, (n_met_members*n_ds_members))
+  obs_met_outfile <- "met_historical.csv"
+  
+  missing_met <- create_obs_met_input(fname = cleaned_met_file,
+                                      outfile = obs_met_outfile,
+                                      full_time_local, 
+                                      local_tzone,
+                                      working_directory,
+                                      hist_days)
+  
+  if(missing_met  == FALSE){
+    met_file_names[] <- obs_met_outfile
+  }else{
+    if(hist_days > 1){
+      stop(paste0("Running more than 1 hist_day but met data has ",
+                  missing_met," values"))
+    }
     in_directory <- paste0(noaa_location)
-    out_directory <- working_glm
-    file_name <- forecast_base_name
-    #NEED TO DOUBLE CHECK THE INPUT_TZ AND WHY IT IS EST
-    #met_file_names[2:(1+(n_met_members*n_ds_members))] <- process_GEFS2GLM(in_directory,
-    #                                                        out_directory,
-    #                                                        file_name, 
-    ##                                                        #NEED TO CHANGE TO GMT IF FORECASTING AFTER DEC 8 00:00:00 GMT
-    #                                                        input_tz = "EST5EDT", 
-    #                                                        output_tz = reference_tzone)
+    out_directory <- working_directory
+    file_name <- forecast_base_name_past
     
     VarInfo <- data.frame("VarNames" = c("AirTemp",
                                          "WindSpeed",
@@ -426,7 +489,77 @@ run_flare<-function(start_day= "2018-07-06 00:00:00",
                                               "lm",
                                               "lm",
                                               "lm",
-                                              "compare_totals"),
+                                              "none"),
+                          "use_covariance" = c(TRUE,
+                                               FALSE,
+                                               TRUE,
+                                               TRUE,
+                                               TRUE,
+                                               FALSE),
+                          stringsAsFactors = FALSE)
+    
+    replaceObsNames <- c("AirTemp" = "AirTemp",
+                         "WindSpeed" = "WindSpeed",
+                         "RelHum" = "RelHum",
+                         "ShortWave" = "ShortWave",
+                         "LongWave" = "LongWave",
+                         "Rain" = "Rain")
+    
+    temp_met_file<- process_downscale_GEFS(folder = code_folder,
+                                           noaa_location,
+                                           input_met_file = cleaned_met_file,
+                                           working_directory,
+                                           n_ds_members,
+                                           n_met_members,
+                                           file_name,
+                                           local_tzone,
+                                           FIT_PARAMETERS,
+                                           DOWNSCALE_MET,
+                                           met_downscale_uncertainty = FALSE,
+                                           compare_output_to_obs = FALSE,
+                                           VarInfo,
+                                           replaceObsNames,
+                                           downscaling_coeff,
+                                           full_time_local,
+                                           first_obs_date = met_ds_obs_start,
+                                           last_obs_date = met_ds_obs_end,
+                                           input_met_file_tz = local_tzone,
+                                           weather_uncertainty,
+                                           obs_met_outfile)
+    
+    met_file_names[1] <- temp_met_file[1]
+  }
+  
+  ###CREATE FUTURE MET FILES
+  if(forecast_days > 0 & use_future_met){
+    in_directory <- paste0(noaa_location)
+    out_directory <- working_directory
+    file_name <- forecast_base_name
+    
+    VarInfo <- data.frame("VarNames" = c("AirTemp",
+                                         "WindSpeed",
+                                         "RelHum",
+                                         "ShortWave",
+                                         "LongWave",
+                                         "Rain"),
+                          "VarType" = c("State",
+                                        "State",
+                                        "State",
+                                        "Flux",
+                                        "Flux",
+                                        "Flux"),
+                          "ds_res" = c("hour",
+                                       "hour",
+                                       "hour",
+                                       "hour",
+                                       "6hr",
+                                       "6hr"),
+                          "debias_method" = c("lm",
+                                              "lm",
+                                              "lm",
+                                              "lm",
+                                              "lm",
+                                              "none"),
                           "use_covariance" = c(TRUE,
                                                TRUE,
                                                TRUE,
@@ -435,443 +568,154 @@ run_flare<-function(start_day= "2018-07-06 00:00:00",
                                                FALSE),
                           stringsAsFactors = FALSE)
     
-    replaceObsNames <- c("AirTC_Avg" = "AirTemp",
-                         "WS_ms_Avg" = "WindSpeed",
-                         "RH" = "RelHum",
-                         "SR01Up_Avg" = "ShortWave",
-                         "IR01UpCo_Avg" = "LongWave",
-                         "Rain_mm_Tot" = "Rain")
-    
-    met_file_names[2:(1+(n_met_members*n_ds_members))] <- process_downscale_GEFS(folder,
-                                                                                 noaa_location,
-                                                                                 met_station_location,
-                                                                                 working_glm,
-                                                                                 sim_files_folder = paste0(folder, "/", "sim_files"),
-                                                                                 n_ds_members,
-                                                                                 n_met_members,
-                                                                                 file_name,
-                                                                                 output_tz = reference_tzone,
-                                                                                 FIT_PARAMETERS,
-                                                                                 DOWNSCALE_MET,
-                                                                                 met_downscale_uncertainty,
-                                                                                 compare_output_to_obs = FALSE,
-                                                                                 VarInfo,
-                                                                                 replaceObsNames,
-                                                                                 downscaling_coeff,
-                                                                                 full_time_local,
-                                                                                 first_obs_date = met_ds_obs_start,
-                                                                                 last_obs_date = met_ds_obs_end)
-    
-    if(weather_uncertainty == FALSE & met_downscale_uncertainty == TRUE){
-      met_file_names <- met_file_names[1:(1+(1*n_ds_members))]
-    }else if(weather_uncertainty == FALSE & met_downscale_uncertainty == FALSE){
-      met_file_names <- met_file_names[1:2]
-    }
-    #plot_downscaled_met(met_file_names, VarInfo$VarNames, working_glm)
+    replaceObsNames <- c("AirTemp" = "AirTemp",
+                         "WindSpeed" = "WindSpeed",
+                         "RelHum" = "RelHum",
+                         "ShortWave" = "ShortWave",
+                         "LongWave" = "LongWave",
+                         "Rain" = "Rain")
+
+    met_file_names[] <- process_downscale_GEFS(folder = code_folder,
+                                                      noaa_location,
+                                                      input_met_file = cleaned_met_file,
+                                                      working_directory,
+                                                      n_ds_members,
+                                                      n_met_members,
+                                                      file_name,
+                                                      local_tzone,
+                                                      FIT_PARAMETERS,
+                                                      DOWNSCALE_MET,
+                                                      met_downscale_uncertainty,
+                                                      compare_output_to_obs = FALSE,
+                                                      VarInfo,
+                                                      replaceObsNames,
+                                                      downscaling_coeff,
+                                                      full_time_local,
+                                                      first_obs_date = met_ds_obs_start,
+                                                      last_obs_date = met_ds_obs_end,
+                                                      input_met_file_tz = local_tzone,
+                                                      weather_uncertainty,
+                                                      obs_met_outfile
+                                                      )
   }
+  
+  inflow_met_file_names <- met_file_names
   
   if(weather_uncertainty == FALSE){
-    n_met_members <- 4
+    n_enkf_members <- n_enkf_members * n_met_members
+    n_met_members <- 1
   }
   
-  ###MOVE DATA FILES AROUND
-  sim_files_folder <- paste0(folder, "/", "sim_files")
-  GLM_folder <- paste0(folder, "/", "glm", "/", machine) 
-  fl <- c(list.files(sim_files_folder, full.names = TRUE))
-  tmp <- file.copy(from = fl, to = working_glm, overwrite = TRUE)
-  fl <- c(list.files(GLM_folder, full.names = TRUE))
-  tmp <- file.copy(from = fl, to = working_glm, overwrite = TRUE)
-  if(!is.na(restart_file)){
-    tmp <- file.copy(from = restart_file, to = working_glm, overwrite = TRUE)
-  }
-  if(pre_scc){
-    fl <- c(list.files("/Users/quinn/Dropbox (VTFRS)/Research/SSC_forecasting/SCC_data/preSCC/",
-                       full.names = TRUE))
-    tmp <- file.copy(from = fl, to = working_glm, overwrite = TRUE)
-  }
-  if(include_wq){
-    file.copy(from = paste0(working_glm, "/", "glm3_wAED.nml"), 
-              to = paste0(working_glm, "/", "glm3.nml"), overwrite = TRUE)
-  }else{
-    if(!pre_scc){
-      file.copy(from = paste0(working_glm, "/", "glm3_woAED.nml"), 
-                to = paste0(working_glm, "/", "glm3.nml"), overwrite = TRUE)
-    }else{
-      file.copy(from = paste0(working_glm, "/", "glm3_woAED_preSCC.nml"), 
-                to = paste0(working_glm, "/", "glm3.nml"), overwrite = TRUE)
-    }
-  }
+
   
   ##CREATE INFLOW AND OUTFILE FILES
-  if(!pre_scc){
-    create_inflow_outflow_file(full_time = full_time_day,
-                               working_glm = working_glm, 
-                               input_tz = "EST5EDT",
-                               output_tz = reference_tzone,
-                               start_forecast_step = start_forecast_step,
-                               hold_inflow_outflow_constant,
-                               inflow_file1,
-                               inflow_file2,
-                               outflow_file1)
-  }
+  inflow_outflow_files <- create_inflow_outflow_file(full_time_local,
+                                                     working_directory, 
+                                                     input_file_tz = "EST",
+                                                     start_forecast_step,
+                                                     inflow_file1 = cleaned_inflow_file,
+                                                     inflow_file2,
+                                                     outflow_file1,
+                                                     chemistry_file = cleaned_inflow_file,
+                                                     local_tzone,
+                                                     met_file_names,
+                                                     forecast_days,
+                                                     inflow_process_uncertainty,
+                                                     future_inflow_flow_coeff,
+                                                     future_inflow_flow_error,
+                                                     future_inflow_temp_coeff,
+                                                     future_inflow_temp_error)
   
-  #Extract observations
-  temp_obs_fname_wdir <- paste0(temperature_location, "/", temp_obs_fname)
-  #PROCESS TEMPERATURE OBSERVATIONS
-  obs_temp <- extract_temp_chain(fname = temp_obs_fname_wdir,
-                                 full_time,
-                                 depths = modeled_depths,
-                                 observed_depths_temp = observed_depths_temp,
-                                 input_tz = "EST5EDT",
-                                 output_tz = reference_tzone)
-  for(i in 1:length(obs_temp$obs[, 1])){
-    for(j in 1:length(obs_temp$obs[1, ])){
-      if(obs_temp$obs[i, j] == 0 | 
-         is.na(obs_temp$obs[i, j]) | 
-         is.nan(obs_temp$obs[i, j])){
-        obs_temp$obs[i, j] = NA
-      } 
-    }
-  }
+  inflow_file_names <- cbind(inflow1 = inflow_outflow_files$inflow_file_names,
+                             inflow2 = inflow_outflow_files$wetland_file_names)
+  outflow_file_names <- cbind(inflow_outflow_files$spillway_file_names)
   
-  init_temps <- obs_temp$obs[1, ]
+
+  #### END DRIVER CONTAINER ####
   
-  #PROCESS DO OBSERVATIONS
-  obs_do <- extract_do_chain(fname = temp_obs_fname_wdir,
-                             full_time,
-                             depths = modeled_depths,
-                             observed_depths_do= observed_depths_do,
-                             input_tz = "EST5EDT", 
-                             output_tz = reference_tzone)
-  obs_do$obs <- obs_do$obs*1000/32  #mg/L (obs units) -> mmol/m3 (glm units)
-  init_do1 <- obs_do$obs[1, ]
   
-  obs_chla_fdom <- extract_chla_chain(fname = temp_obs_fname_wdir,
-                                      full_time,
-                                      depths = modeled_depths,
-                                      observed_depths_chla_fdom = observed_depths_chla_fdom,
-                                      input_tz = "EST5EDT", 
-                                      output_tz = reference_tzone)
+  #### START GLM ENKF CONTAINER ####
   
-  #Use the CTD observation rather than the sensor string when CTD data is avialable
-  if(use_ctd){
-    ## LOOK AT CTD DATA
-    fl <- c(list.files("/Users/quinn/Dropbox (VTFRS)/Research/SSC_forecasting/SCC_data/preSCC/",
-                       pattern = "CTD", 
-                       full.names = TRUE))
+  
+  ####################################################
+  #### STEP 6: PROCESS OBSERVATIONS DATA FOR ENKF
+  ####################################################
+
+  print("Extracting temperature observations")
+  obs_temp <- extract_observations(fname = cleaned_observations_file_long,
+                                   full_time_local,
+                                   modeled_depths = modeled_depths,
+                                   local_tzone,
+                                   target_variable = "temperature",
+                                   time_threshold_seconds = time_threshold_seconds_temp,
+                                   distance_threshold_meter = distance_threshold_meter,
+                                   methods = temp_methods)
+  
+  if(include_wq){
+
+    print("Extracting DO observations")
+    obs_do <- extract_observations(fname = cleaned_observations_file_long,
+                                   full_time_local,
+                                   modeled_depths = modeled_depths,
+                                   local_tzone,
+                                   target_variable = "oxygen",
+                                   time_threshold_seconds = time_threshold_seconds_oxygen,
+                                   distance_threshold_meter = distance_threshold_meter,
+                                   methods = do_methods)
+
+    print("Extracting Chl-a observations")
+    obs_chla <- extract_observations(fname = cleaned_observations_file_long,
+                                     full_time_local,
+                                     modeled_depths = modeled_depths,
+                                     local_tzone,
+                                     target_variable = "chla",
+                                     time_threshold_seconds = time_threshold_seconds_chla,
+                                     distance_threshold_meter = distance_threshold_meter,
+                                     methods = chla_methods)
     
-    #NEED TO DOUBLE CHECK TIME ZONE
-    obs_ctd <- extract_temp_CTD(fname = fl[1],
-                                full_time_day_local,
-                                depths = modeled_depths,
-                                input_tz = "EST5EDT",
-                                output_tz = reference_tzone)
+    print("Extracting fdom observations")
+    obs_fdom <- extract_observations(fname = cleaned_observations_file_long,
+                                     full_time_local,
+                                     modeled_depths = modeled_depths,
+                                     local_tzone,
+                                     target_variable = "fdom",
+                                     time_threshold_seconds = time_threshold_seconds_fdom,
+                                     distance_threshold_meter = distance_threshold_meter,
+                                     methods = fdom_methods)
     
-    obs_ctd$obs_do <- obs_ctd$obs_do*1000/32
-    for(i in 1:length(full_time_day)){
-      if(!is.na(obs_ctd$obs_temp[i, 1])){
-        obs_temp$obs[i,] <- obs_ctd$obs_temp[i, ]
-        obs_do$obs[i,] <- obs_ctd$obs_do[i, ]
-        obs_chla_fdom$Chla_obs[i,] <- obs_ctd$obs_chla[i, ]
-      }
-    }
-    init_pH_obs <- obs_ctd$obs_pH[1, which(!is.na(obs_ctd$obs_pH[1, ]))]
-    init_obs_pH_depths <- modeled_depths[which(!is.na(obs_ctd$obs_pH[1, ]))]
+    print("Extracting NH4 observations")
+    obs_NH4 <- extract_observations(fname = cleaned_observations_file_long,
+                                    full_time_local,
+                                    modeled_depths = modeled_depths,
+                                    local_tzone,
+                                    target_variable = "NH4",
+                                    time_threshold_seconds = time_threshold_seconds_nh4,
+                                    distance_threshold_meter = distance_threshold_meter,
+                                    methods = nh4_methods)
     
-    init_sal_obs <- obs_ctd$obs_sal[1, which(!is.na(obs_ctd$obs_sal[1, ]))]
-    init_obs_sal_depths <- modeled_depths[which(!is.na(obs_ctd$obs_sal[1, ]))]
-  }
-  
-  init_temps_obs <- obs_temp$obs[1, which(!is.na(obs_temp$obs[1, ]))]
-  init_obs_temp_depths <- modeled_depths[which(!is.na(obs_temp$obs[1, ]))]
-  
-  init_do_obs <- obs_do$obs[1, which(!is.na(obs_do$obs[1, ]))]
-  init_obs_do_depths <- modeled_depths[which(!is.na(obs_do$obs[1, ]))]
-  
-  #NEED AN ERROR CHECK FOR WHETHER THERE ARE OBSERVED DATA
-  if(is.na(restart_file)){
-    if((length(which(init_temps_obs != 0.0)) == 0) |
-       length(which(is.na(init_temps_obs))) > 0){
-      print("Pick another start day or provide an initial condition file: 
-            observations not avialable for starting day")
-      break
-    }
-    temp_inter <- approxfun(init_obs_temp_depths, init_temps_obs, rule=2)
-    the_temps_init <- temp_inter(modeled_depths)
-    if(include_wq){
-      do_inter <- approxfun(init_obs_do_depths, init_do_obs, rule=2)
-      do_init <- do_inter(modeled_depths)
-      if(use_ctd){
-        if(length(which(!is.na(init_pH_obs))) > 0){
-          pH_inter <- approxfun(init_obs_pH_depths, init_pH_obs, rule=2)
-          pH_init <- pH_inter(modeled_depths)
-        }
-      }
-    }
+    print("Extracting NO3 observations")
+    obs_NO3 <- extract_observations(fname = cleaned_observations_file_long,
+                                    full_time_local,
+                                    modeled_depths = modeled_depths,
+                                    local_tzone,
+                                    target_variable = "NO3NO2",
+                                    time_threshold_seconds = time_threshold_seconds_no3,
+                                    distance_threshold_meter = distance_threshold_meter,
+                                    methods = no3_methods)
+    
+    print("Extracting SRP observations")
+    obs_SRP <- extract_observations(fname = cleaned_observations_file_long,
+                                    full_time_local,
+                                    modeled_depths = modeled_depths,
+                                    local_tzone,
+                                    target_variable = "SRP",
+                                    time_threshold_seconds = time_threshold_seconds_srp,
+                                    distance_threshold_meter = distance_threshold_meter,
+                                    methods = srp_methods)
   }
   
   ####################################################
-  #### STEP 7: SET UP INITIAL CONDITIONS
-  ####################################################
-  
-  wq_start <- NA
-  wq_end <- NA
-  if(include_wq){
-    temp_start <- 1
-    temp_end <- length(modeled_depths)
-    wq_start <- rep(NA, num_wq_vars)
-    wq_end <- rep(NA, num_wq_vars)
-    for(wq in 1:num_wq_vars){
-      if(wq == 1){
-        wq_start[wq] <- temp_end+1
-        wq_end[wq] <- temp_end + (length(modeled_depths))
-      }else{
-        wq_start[wq] <- wq_end[wq-1]+1
-        wq_end[wq] <- wq_end[wq-1] + (length(modeled_depths))
-      }
-      
-      if(npars > 0){ #NEED TO GENERALIZE
-        par1 <- wq_end[num_wq_vars] + 1
-        par2 <- par1 + 1
-        par3 <-  par2 + 1
-        par4 <-  par3 + 1
-      }else{
-        par1 <- wq_end[num_wq_vars]
-        par2 <- wq_end[num_wq_vars]
-        par3 <- wq_end[num_wq_vars]
-        par4 <- wq_end[num_wq_vars]
-      }
-      
-    }
-  }else{
-    temp_start <- 1
-    temp_end <- length(modeled_depths)
-    if(npars > 0){
-      par1 <- temp_end + 1
-      par2 <- par1 + 1
-      par3 <-  par2 + 1
-      par4 <-  par3 + 1
-    }else{
-      par1 <- temp_end
-      par2 <- temp_end
-      par3 <- temp_end
-      par4 <- temp_end
-    }
-  }
-  
-  #UPDATE NML WITH PARAMETERS AND INITIAL CONDITIONS
-  #Initial States
-  the_sals_init <- 0.0
-  OXY_oxy_init <- 300.62
-  CAR_pH_init <- 6.5
-  CAR_dic_init <- 59.1
-  CAR_ch4_init <- 0.58
-  SIL_rsi_init <- 300
-  NIT_amm_init <- 0.69
-  NIT_nit_init <- 0.05
-  PHS_frp_init <- 0.07
-  OGM_doc_init <- 47.4
-  OGM_poc_init <- 78.5
-  OGM_don_init <- 1.3
-  OGM_pon_init <- 8.3
-  OGM_dop_init <- 1.5
-  OGM_pop_init <- 8.3
-  PHY_CYANOPCH1_init <- 2.0
-  PHY_CYANONPCH2_init <-2.0
-  PHY_CHLOROPCH3_init <-2.0
-  PHY_DIATOMPCH4_init <- 2.0
-  ZOO_COPEPODS1_init <- 2.9
-  ZOO_DAPHNIABIG2_init <- 4.3
-  ZOO_DAPHNIASMALL3_init <- 40
-  
-  OXY_oxy_error <- OXY_oxy_init*0.00001
-  CAR_pH_error <- CAR_pH_init*0.00001
-  CAR_dic_error <- CAR_dic_init*0.00001
-  CAR_ch4_error <- CAR_ch4_init*0.00001
-  SIL_rsi_error <- SIL_rsi_init*0.00001
-  NIT_amm_error <- NIT_amm_init*0.00001
-  NIT_nit_error <- NIT_nit_init*0.00001
-  PHS_frp_error <- PHS_frp_init*0.00001
-  OGM_doc_error <- OGM_doc_init*0.00001
-  OGM_poc_error <- OGM_poc_init*0.00001
-  OGM_don_error <- OGM_don_init*0.00001
-  OGM_pon_error <- OGM_pon_init*0.00001
-  OGM_dop_error <- OGM_dop_init*0.00001
-  OGM_pop_error <- OGM_pop_init*0.00001
-  PHY_CYANOPCH1_error <- PHY_CYANOPCH1_init*0.0001
-  PHY_CYANONPCH2_error <-PHY_CYANONPCH2_init*0.0001
-  PHY_CHLOROPCH3_error <-PHY_CHLOROPCH3_init*0.0001
-  PHY_DIATOMPCH4_error <- PHY_DIATOMPCH4_init*0.0001
-  ZOO_COPEPODS1_error <- ZOO_COPEPODS1_init*0.00001
-  ZOO_DAPHNIABIG2_error <- ZOO_DAPHNIABIG2_init*0.00001
-  ZOO_DAPHNIASMALL3_error <- ZOO_DAPHNIASMALL3_init*0.00001
-  
-  wq_var_error <- c(OXY_oxy_error,
-                    CAR_pH_error,
-                    CAR_dic_error,
-                    CAR_ch4_error,
-                    SIL_rsi_error,
-                    NIT_amm_error,
-                    NIT_nit_error,
-                    PHS_frp_error,
-                    OGM_doc_error,
-                    OGM_poc_error, 
-                    OGM_don_error,
-                    OGM_pon_error,
-                    OGM_dop_error,
-                    OGM_pop_error,
-                    PHY_CYANOPCH1_error,
-                    PHY_CYANONPCH2_error,
-                    PHY_CHLOROPCH3_error,
-                    PHY_DIATOMPCH4_error
-                    #ZOO_COPEPODS1_error,
-                    #ZOO_DAPHNIABIG2_error,
-                    #ZOO_DAPHNIASMALL3_error)
-                    )
-  
-  if(include_wq & use_ctd){
-    OXY_oxy_init_depth <- do_init
-  }else{
-    OXY_oxy_init_depth <- rep(OXY_oxy_init, ndepths_modeled)  
-    OXY_oxy_init_depth[1] <- 400
-  }
-  if(include_wq & use_ctd){
-    CAR_pH_init_depth <- pH_init
-  }else{
-    CAR_pH_init_depth <- rep(CAR_pH_init, ndepths_modeled) 
-  }
-  
-  CAR_dic_init_depth <- rep(CAR_dic_init, ndepths_modeled)
-  CAR_ch4_init_depth <- rep(CAR_ch4_init, ndepths_modeled)
-  SIL_rsi_init_depth <- rep(SIL_rsi_init, ndepths_modeled)
-  NIT_amm_init_depth <- rep(NIT_amm_init, ndepths_modeled)
-  NIT_nit_init_depth <- rep(NIT_nit_init, ndepths_modeled)
-  PHS_frp_init_depth <- rep(PHS_frp_init, ndepths_modeled)
-  OGM_doc_init_depth <- rep(OGM_doc_init, ndepths_modeled)
-  OGM_poc_init_depth <- rep(OGM_poc_init, ndepths_modeled)
-  OGM_don_init_depth <- rep(OGM_don_init, ndepths_modeled)
-  OGM_pon_init_depth <- rep(OGM_pon_init, ndepths_modeled)
-  OGM_dop_init_depth <- rep(OGM_dop_init, ndepths_modeled)
-  OGM_pop_init_depth <- rep(OGM_pop_init, ndepths_modeled)
-  PHY_CYANOPCH1_init_depth <- rep(PHY_CYANOPCH1_init, ndepths_modeled)
-  PHY_CYANONPCH2_init_depth <- rep(PHY_CYANONPCH2_init, ndepths_modeled)
-  PHY_CHLOROPCH3_init_depth <- rep(PHY_CHLOROPCH3_init, ndepths_modeled)
-  PHY_DIATOMPCH4_init_depth <- rep(PHY_DIATOMPCH4_init, ndepths_modeled)
-  ZOO_COPEPODS1_init_depth <- rep(ZOO_COPEPODS1_init, ndepths_modeled)
-  ZOO_DAPHNIABIG2_init_depth <- rep(ZOO_DAPHNIABIG2_init, ndepths_modeled)
-  ZOO_DAPHNIASMALL3_init_depth <- rep(ZOO_DAPHNIASMALL3_init, ndepths_modeled)
-  
-  
-  if(full_time_day_local[1] == 
-     strftime("2018-07-09",format="%Y-%m-%d",tz = "EST5EDT") &
-     include_wq){
-    curr_depths <- c(0.1,1.6,3.8,5,6.2,8, 9,10)
-    #mg/L
-    curr_values <- c(3.764, 3.781, 3.578, 5.156, 5.2735, 5.5165, 5.222, 5.368)
-    curr_values <- (curr_values*1000)/(10*12)
-    inter <- approxfun(curr_depths,curr_values,rule=2)
-    CAR_dic_init_depth <- inter(modeled_depths)
-    
-    curr_depths <- c(0.1,1.6,3.8,5,6.2,8,9,9.5)
-    #umol CH4/L
-    curr_values <- c(3.91E-04,0.370572728,0.107597836,0.126096596,
-                     0.088502664,0.086276629,0.07256043,0.07249431)
-    curr_values <- curr_values#*1000
-    inter <- approxfun(curr_depths,curr_values,rule=2)
-    CAR_ch4_init_depth <- inter(modeled_depths)
-    
-    curr_depths <- c(0.1,1.6,3.8,5,6.2,8, 9, 10)
-    #ug/L
-    curr_values <- c(12.65291714,4.213596723,10.5935375,13.43611258,
-                     11.34765394,11.95676704,11.98577285,12.82695814)
-    curr_values <- (curr_values*1000)/14
-    inter <- approxfun(curr_depths,curr_values,rule=2)
-    NIT_amm_init_depth <- inter(modeled_depths)
-    
-    curr_depths <- c(0.1,1.6,3.8,5,6.2,8, 9, 10)
-    curr_values <-c(5.68,3.82,4.46,3.71,4.18,5.08,3.01,7.72)
-    curr_values <- (curr_values*1000)/14
-    #ug/L
-    inter <- approxfun(curr_depths,curr_values,rule=2)
-    NIT_nit_init_depth <- inter(modeled_depths)
-    
-    curr_depths <- c(0.1,1.6,3.8,5,6.2,8, 9, 10)
-    #ug/L
-    curr_values <- c(8.96,7.66,6.26,6.22,7.72,9.69,7.95,10.5)
-    curr_values <- (curr_values*1000)/18
-    inter <- approxfun(curr_depths,curr_values,rule=2)
-    PHS_frp_init_depth <- inter(modeled_depths)
-    
-    curr_depths <- c(0.1,1.6,3.8,5,6.2,8, 9, 10)
-    ##mg/L
-    curr_values <- c(4.2315,4.374, 3.2655,2.9705,2.938,2.922,2.773,2.9525)
-    curr_values <- (curr_values*1000)/(10*12)
-    inter <- approxfun(curr_depths,curr_values,rule=2)
-    OGM_doc_init_depth <- inter(modeled_depths)
-    
-    curr_depths <- c(0.1,1.6,3.8,5,6.2,8, 9, 10)
-    ##mg/L
-    curr_values <- c(0.2855,0.261,0.218,0.2135,0.2185,0.223,0.2025,0.2065)
-    curr_values <- (curr_values*1000)/(10*14)
-    inter <- approxfun(curr_depths,curr_values,rule=2)
-    DN_init_depth <- inter(modeled_depths)
-    OGM_don_init_depth <- DN_init_depth - NIT_amm_init_depth - NIT_nit_init_depth
-  }
-  
-  wq_init_vals <- c(OXY_oxy_init_depth,
-                    CAR_pH_init_depth,
-                    CAR_dic_init_depth,
-                    CAR_ch4_init_depth,
-                    SIL_rsi_init_depth,
-                    NIT_amm_init_depth,
-                    NIT_nit_init_depth,
-                    PHS_frp_init_depth,
-                    OGM_doc_init_depth,
-                    OGM_poc_init_depth,
-                    OGM_don_init_depth,
-                    OGM_pon_init_depth,
-                    OGM_dop_init_depth,
-                    OGM_pop_init_depth,
-                    PHY_CYANOPCH1_init_depth,
-                    PHY_CYANONPCH2_init_depth,
-                    PHY_CHLOROPCH3_init_depth,
-                    PHY_DIATOMPCH4_init_depth)
-                    #ZOO_COPEPODS1_init_depth,
-                    #ZOO_DAPHNIABIG2_init_depth,
-                    #ZOO_DAPHNIASMALL3_init_depth)
-  
-  #UPDATE NML WITH PARAMETERS AND INITIAL CONDITIONS
-  if(include_wq){
-    update_var(wq_init_vals, "wq_init_vals", working_glm)
-    update_var(num_wq_vars, "num_wq_vars", working_glm)
-  }else{
-    update_var(" ", "wq_init_vals", working_glm)
-    update_var(0, "num_wq_vars", working_glm)
-  }
-  update_var(ndepths_modeled, "num_depths", working_glm)
-  update_var(modeled_depths, "the_depths", working_glm)
-  update_var(rep(the_sals_init, ndepths_modeled), "the_sals", working_glm)
-  
-  #Create a copy of the NML to record starting parameters
-  file.copy(from = paste0(working_glm, "/", "glm3.nml"), 
-            to = paste0(working_glm, "/", "glm3_initial.nml"), overwrite = TRUE)
-  
-  #NUMBER OF STATE SIMULATED = SPECIFIED DEPTHS
-  if(include_wq){
-    nstates <- ndepths_modeled*(1+num_wq_vars)
-  }else{
-    nstates <- ndepths_modeled
-  }
-  
-  if(include_wq){
-    #NEED TO ADD ADDITIONAL OBSERVATION TYPES
-    nobs <- length(observed_depths_temp) + length(observed_depths_do) 
-  }else{
-    nobs <- length(observed_depths_temp)
-  }
-  
-  ####################################################
-  #### STEP 8: CREATE THE Z ARRAY (OBSERVATIONS x TIME)
+  #### STEP 7: CREATE THE Z ARRAY (OBSERVATIONS x TIME)
   ####################################################
   
   #Observations for each observed state at each time step
@@ -879,9 +723,51 @@ run_flare<-function(start_day= "2018-07-06 00:00:00",
   #observation in a time-step gets assigned an NA
   
   if(include_wq){
-    z <- cbind(obs_temp$obs, obs_do$obs)
+    obs_dims <- dim(obs_do)
+    
+    OXY_oxy_obs <- obs_do
+    CAR_pH_obs <- array(NA, dim = obs_dims)
+    CAR_dic_obs <- array(NA, dim = obs_dims)
+    CAR_ch4_obs <- array(NA, dim = obs_dims)
+    SIL_rsi_obs <- array(NA, dim = obs_dims)
+    NIT_amm_obs <- obs_NH4
+    NIT_nit_obs <- obs_NO3
+    PHS_frp_obs <- obs_SRP
+    OGM_doc_obs <- obs_fdom
+    OGM_poc_obs <- array(NA, dim = obs_dims)
+    OGM_don_obs <- array(NA, dim = obs_dims)
+    OGM_pon_obs <- array(NA, dim = obs_dims)
+    OGM_dop_obs <- array(NA, dim = obs_dims)
+    OGM_pop_obs <- array(NA, dim = obs_dims)
+    NCS_ss1_obs <- array(NA, dim = obs_dims)
+    PHS_frp_ads_obs <- array(NA, dim = obs_dims)
+    PHY_TCHLA_obs <- obs_chla
+    
+    if("PHY_TCHLA" %in% wq_names){
+      z <- cbind(obs_temp,
+                 OXY_oxy_obs,
+                 CAR_pH_obs,
+                 CAR_dic_obs,
+                 CAR_ch4_obs,
+                 SIL_rsi_obs,
+                 NIT_amm_obs,
+                 NIT_nit_obs,
+                 PHS_frp_obs,
+                 OGM_doc_obs,
+                 OGM_poc_obs,
+                 OGM_don_obs,
+                 OGM_pon_obs,
+                 OGM_dop_obs,
+                 OGM_pop_obs,
+                 NCS_ss1_obs,
+                 PHS_frp_ads_obs,
+                 PHY_TCHLA_obs)
+    }else{
+      z <- cbind(obs_temp,
+                 OXY_oxy_obs)
+    }
   }else{
-    z <- cbind(obs_temp$obs) 
+    z <- cbind(obs_temp) 
   }
   
   z_obs <- z
@@ -889,31 +775,241 @@ run_flare<-function(start_day= "2018-07-06 00:00:00",
     z[, ] <- NA
   }
   
-  #FIGURE OUT WHICH DEPTHS HAVE OBSERVATIONS
-  if(include_wq){
-    obs_index <- rep(NA,length(modeled_depths)*(num_wq_vars+1))
-    obs_index[1:length(modeled_depths)] <- seq(1, length(modeled_depths), 1)
-    for(wq in 1:num_wq_vars){
-      obs_index[wq_start[wq]:wq_end[wq]] <- seq(wq_start[wq], wq_end[wq], 1)
-    }
-  }else{
-    obs_index <- rep(NA,length(modeled_depths))
-    obs_index[1:length(modeled_depths)] <- seq(1, length(modeled_depths), 1)
-  }
+  obs_index <- seq(1,nstates, 1)
   
   #Matrix for knowing which state the observation corresponds to
   z_states <- t(matrix(obs_index, nrow = length(obs_index), ncol = nsteps))
   
+  ####################################################
+  #### STEP 8: SET UP INITIAL CONDITIONS
+  ####################################################
   
+  init_temps_obs <- obs_temp[1, which(!is.na(obs_temp[1, ]))]
+  init_obs_temp_depths <- modeled_depths[which(!is.na(obs_temp[1, ]))]
+  
+  if(include_wq){
+    init_do_obs <- obs_do[1, which(!is.na(obs_do[1, ]))]
+    init_obs_do_depths <- modeled_depths[which(!is.na(obs_do[1, ]))]
+    
+    init_chla_obs <- obs_chla[1, which(!is.na(obs_chla[1, ]))]
+    init_chla_obs_depths <- modeled_depths[which(!is.na(obs_chla[1, ]))]
+    
+    init_doc_obs <- obs_fdom[1, which(!is.na(obs_fdom[1, ]))]
+    init_doc_obs_depths <- modeled_depths[which(!is.na(obs_fdom[1, ]))]
+    
+    init_nit_amm_obs <- obs_NH4[1, which(!is.na(obs_NH4[1, ]))]
+    init_nit_amm_obs_depths <- modeled_depths[which(!is.na(obs_NH4[1, ]))]
+    
+    init_nit_nit_obs <- obs_NO3[1, which(!is.na(obs_NO3[1, ]))]
+    init_nit_nit_obs_depths <- modeled_depths[which(!is.na(obs_NO3[1, ]))]
+    
+    init_phs_frp_obs <- obs_SRP[1, which(!is.na(obs_SRP[1, ]))]
+    init_phs_frp_obs_depths <- modeled_depths[which(!is.na(obs_SRP[1, ]))]
+  }
+  
+  
+  #OGM_doc_init_depth <- NA
+  #PHY_TCHLA_init_depth <- NA
+  #OXY_oxy_init_depth <- NA
+  
+  #NEED AN ERROR CHECK FOR WHETHER THERE ARE OBSERVED DATA
+  if(is.na(restart_file)){
+    if((length(which(init_temps_obs != 0.0)) == 0) | length(which(is.na(init_temps_obs))) > 0){
+      print("Using default temperature values to initialize")
+      init_temps_obs <- default_temp_init
+      init_obs_temp_depths <- default_temp_init_depths
+    }
+    temp_inter <- approxfun(init_obs_temp_depths, init_temps_obs, rule=2)
+    the_temps_init <- temp_inter(modeled_depths)
+  }
+  
+  wq_start <- NA
+  wq_end <- NA
+  if(include_wq){
+    temp_start <- 1
+    temp_end <- ndepths_modeled
+    wq_start <- rep(NA, num_wq_vars)
+    wq_end <- rep(NA, num_wq_vars)
+    for(wq in 1:num_wq_vars){
+      if(wq == 1){
+        wq_start[wq] <- temp_end+1
+        wq_end[wq] <- temp_end + (ndepths_modeled)
+      }else{
+        wq_start[wq] <- wq_end[wq-1]+1
+        wq_end[wq] <- wq_end[wq-1] + (ndepths_modeled)
+      }
+    }
+  }else{
+    temp_start <- 1
+    temp_end <- ndepths_modeled
+    wq_start <- temp_end+1
+    wq_end <- temp_end+1
+  }
+  
+  if(include_wq & is.na(restart_file)){
+    
+    #Initialize Oxygen using data if avialable
+    if(length(!is.na(init_do_obs)) == 0){
+      OXY_oxy_init_depth <- rep(OXY_oxy_init, ndepths_modeled) 
+    }else if(length(!is.na(init_do_obs)) == 1){
+      OXY_oxy_init_depth <- rep(init_do_obs, ndepths_modeled)
+    }else{
+      do_inter <- approxfun(init_obs_do_depths, init_do_obs, rule=2)
+      OXY_oxy_init_depth <- do_inter(modeled_depths)
+    }
+    
+    #Initialize Chla usind data if avialable
+    if(length(!is.na(init_chla_obs)) == 0){
+      PHY_TCHLA_init_depth <- rep(PHY_TCHLA_init, ndepths_modeled) 
+    }else if(length(!is.na(init_chla_obs)) == 1){
+      PHY_TCHLA_init_depth <- rep(init_chla_obs, ndepths_modeled)
+    }else{
+      chla_inter <- approxfun(init_chla_obs_depths, init_chla_obs, rule=2)
+      PHY_TCHLA_init_depth <- chla_inter(modeled_depths)
+    }
+    
+    #Initialize DOC usind data if avialable
+    if(length(!is.na(init_doc_obs)) == 0){
+      OGM_doc_init_depth <- rep(OGM_doc_init, ndepths_modeled) 
+    }else if(length(!is.na(init_doc_obs)) == 1){
+      OGM_doc_init_depth <- rep(init_doc_obs, ndepths_modeled)
+    }else{
+      doc_inter <- approxfun(init_doc_obs_depths, init_doc_obs, rule=2)
+      OGM_doc_init_depth <- doc_inter(modeled_depths)
+    }
+    
+    #Initialize DOC usind data if avialable
+    if(length(!is.na(init_nit_amm_obs)) == 0){
+      NIT_amm_init_depth <- rep(NIT_amm_init, ndepths_modeled) 
+    }else if(length(!is.na(init_nit_amm_obs)) == 1){
+      NIT_amm_init_depth <- rep(init_nit_amm_obs, ndepths_modeled)
+    }else{
+      temp_inter <- approxfun(init_nit_amm_obs_depths, init_nit_amm_obs, rule=2)
+      NIT_amm_init_depth <- temp_inter(modeled_depths)
+    }
+    
+    #Initialize DOC usind data if avialable
+    if(length(!is.na(init_nit_nit_obs)) == 0){
+      NIT_nit_init_depth <- rep(NIT_nit_init, ndepths_modeled) 
+    }else if(length(!is.na(init_nit_nit_obs)) == 1){
+      NIT_nit_init_depth <- rep(init_nit_nit_obs, ndepths_modeled)
+    }else{
+      temp_inter <- approxfun(init_nit_nit_obs_depths, init_nit_nit_obs, rule=2)
+      NIT_nit_init_depth <- temp_inter(modeled_depths)
+    }
+    
+    #Initialize DOC usind data if avialable
+    if(length(!is.na(init_phs_frp_obs)) == 0){
+      PHS_frp_init_depth <- rep(PHS_frp_init, ndepths_modeled) 
+    }else if(length(!is.na(init_phs_frp_obs)) == 1){
+      PHS_frp_init_depth <- rep(init_phs_frp_obs, ndepths_modeled)
+    }else{
+      temp_inter <- approxfun(init_phs_frp_obs_depths, init_phs_frp_obs, rule=2)
+      PHS_frp_init_depth <- temp_inter(modeled_depths)
+    }
+    
+    
+    #Initilize other water quality variables
+    CAR_pH_init_depth  <- rep(CAR_pH_init, ndepths_modeled) 
+    CAR_dic_init_depth <- rep(CAR_dic_init, ndepths_modeled)
+    CAR_ch4_init_depth <- rep(CAR_ch4_init, ndepths_modeled)
+    SIL_rsi_init_depth <- rep(SIL_rsi_init, ndepths_modeled)
+    OGM_poc_init_depth <- rep(OGM_poc_init, ndepths_modeled)
+    OGM_don_init_depth <- OGM_doc_init_depth * init_donc
+    OGM_pon_init_depth <- rep(OGM_pon_init, ndepths_modeled)
+    OGM_dop_init_depth <- OGM_doc_init_depth * init_dopc
+    OGM_pop_init_depth <- rep(OGM_pop_init, ndepths_modeled)
+    NCS_ss1_init_depth <- rep(NCS_ss1_init, ndepths_modeled)
+    PHS_frp_ads_init_depth <- rep(PHS_frp_ads_init, ndepths_modeled)
+    
+    if("PHY_TCHLA" %in% wq_names){
+      wq_init_vals <- c(OXY_oxy_init_depth,
+                        CAR_pH_init_depth,
+                        CAR_dic_init_depth,
+                        CAR_ch4_init_depth,
+                        SIL_rsi_init_depth,
+                        NIT_amm_init_depth,
+                        NIT_nit_init_depth,
+                        PHS_frp_init_depth,
+                        OGM_doc_init_depth,
+                        OGM_poc_init_depth,
+                        OGM_don_init_depth,
+                        OGM_pon_init_depth,
+                        OGM_dop_init_depth,
+                        OGM_pop_init_depth,
+                        NCS_ss1_init_depth,
+                        PHS_frp_ads_init_depth,
+                        PHY_TCHLA_init_depth
+      )
+    }else{
+      wq_init_vals <- c(OXY_oxy_init_depth)
+    }
+    
+    #UPDATE NML WITH INITIAL CONDITIONS
+    
+  }else if(!include_wq & is.na(restart_file)){
+    #UPDATE NML WITH INITIAL CONDITIONS
+    wq_init_vals <- c(" ")
+  }
+  
+  ########################################
+  #BEGIN GLM SPECIFIC PART
+  ########################################
+  
+  GLM_folder <- paste0(code_folder, "/", "glm", "/", machine) 
+  fl <- c(list.files(GLM_folder, full.names = TRUE))
+  tmp <- file.copy(from = fl, to = working_directory, overwrite = TRUE)
+  
+  file.copy(from = paste0(base_GLM_nml), 
+            to = paste0(working_directory, "/", "glm3.nml"), overwrite = TRUE)
+  
+  #update_var(wq_init_vals, "wq_init_vals", working_directory, "glm3.nml") #GLM SPECIFIC
+  if(include_wq){
+    if("PHY_TCHLA" %in% wq_names){
+    update_var(num_wq_vars - 1 + length(tchla_components_vars), "num_wq_vars", working_directory, "glm3.nml") #GLM SPECIFIC
+    }else{
+      update_var(num_wq_vars, "num_wq_vars", working_directory, "glm3.nml") #GLM SPECIFIC
+    }
+    file.copy(from = paste0(base_AED_nml), 
+              to = paste0(working_directory, "/", "aed2.nml"), overwrite = TRUE)
+    file.copy(from = paste0(base_AED_phyto_pars_nml), 
+              to = paste0(working_directory, "/", "aed2_phyto_pars.nml"), overwrite = TRUE)
+    file.copy(from = paste0(base_AED_zoop_pars_nml), 
+              to = paste0(working_directory, "/", "aed2_zoop_pars.nml"), overwrite = TRUE)
+  }else{
+    update_var(0, "num_wq_vars", working_directory, "glm3.nml") #GLM SPECIFIC
+  }
+  update_var(ndepths_modeled, "num_depths", working_directory, "glm3.nml") #GLM SPECIFIC
+  update_var(modeled_depths, "the_depths", working_directory, "glm3.nml") #GLM SPECIFIC
+  update_var(rep(the_sals_init, ndepths_modeled), "the_sals", working_directory, "glm3.nml") #GLM SPECIFIC
+  
+  #Create a copy of the NML to record starting initial conditions
+  file.copy(from = paste0(working_directory, "/", "glm3.nml"), #GLM SPECIFIC
+            to = paste0(working_directory, "/", "glm3_initial.nml"), overwrite = TRUE) #GLM SPECIFIC
+  
+  ########################################
+  #END GLM SPECIFIC PART
+  ########################################
+
   #######################################################
   #### STEP 9: CREATE THE PSI VECTOR (DATA uncertainty)  
   #######################################################
+  psi_slope <- rep(NA, length(obs_index))
+  psi_intercept <- rep(NA, length(obs_index))
   
-  psi <- rep(obs_error, length(obs_index))
+  psi_slope[1: ndepths_modeled] <- rep(obs_error_temperature_slope, ndepths_modeled)
+  psi_intercept[1: ndepths_modeled] <- rep(obs_error_temperature_intercept, ndepths_modeled)
+  if(include_wq){
+    for(wq in 1:num_wq_vars){
+      psi_intercept[wq_start[wq]:wq_end[wq]] <- rep(obs_error_wq_intercept[wq], ndepths_modeled)
+      psi_slope[wq_start[wq]:wq_end[wq]] <- rep(obs_error_wq_slope[wq], ndepths_modeled)
+    }
+  }
   
   ####################################################
-  #### STEP 12: CREATE THE QT ARRAY (MODEL VARIANCE)
+  #### STEP 10: CREATE THE QT ARRAY (MODEL VARIANCE)
   ####################################################
+  
   restart_present <- FALSE
   if(!is.na(restart_file)){
     if(file.exists(restart_file)){
@@ -924,44 +1020,119 @@ run_flare<-function(start_day= "2018-07-06 00:00:00",
   if(restart_present){
     nc <- nc_open(restart_file)
     qt <- ncvar_get(nc, "qt_restart")
-    resid30day <- ncvar_get(nc, "resid30day")
+    running_residuals <- ncvar_get(nc, "running_residuals")
+    qt_pars <- matrix(data = 0, nrow = npars, ncol = npars)
+    diag(qt_pars) <- par_init_qt
     nc_close(nc)
+    qt_init <- qt
   }else{
-    #Process error 
-    if(is.na(cov_matrix)){
-      qt <- read.csv(paste0(working_glm, "/", "qt_cov_matrix.csv"))
-    }else{
-      qt <- read.csv(paste0(working_glm, "/", cov_matrix))
-    }
+    qt <- matrix(data = 0, nrow = ndepths_modeled, ncol = ndepths_modeled)
+    
+    diag(qt) <- rep(temp_process_error,ndepths_modeled )
+    qt_init <- matrix(data = 0, nrow = ndepths_modeled, ncol = ndepths_modeled)
+    diag(qt_init) <- rep(temp_init_error,ndepths_modeled)
     
     if(include_wq){
+      
+      if("PHY_TCHLA" %in% wq_names){
+        wq_var_error <- c(OXY_oxy_process_error,
+                          CAR_pH_process_error,
+                          CAR_dic_process_error,
+                          CAR_ch4_process_error,
+                          SIL_rsi_process_error,
+                          NIT_amm_process_error,
+                          NIT_nit_process_error,
+                          PHS_frp_process_error,
+                          OGM_doc_process_error,
+                          OGM_poc_process_error, 
+                          OGM_don_process_error,
+                          OGM_pon_process_error,
+                          OGM_dop_process_error,
+                          OGM_pop_process_error,
+                          NCS_ss1_process_error,
+                          PHS_frp_ads_process_error,
+                          PHY_TCHLA_process_error)
+        
+        wq_var_init_error <- c(OXY_oxy_init_error,
+                               CAR_pH_init_error,
+                               CAR_dic_init_error,
+                               CAR_ch4_init_error,
+                               SIL_rsi_init_error,
+                               NIT_amm_init_error,
+                               NIT_nit_init_error,
+                               PHS_frp_init_error,
+                               OGM_doc_init_error,
+                               OGM_poc_init_error, 
+                               OGM_don_init_error,
+                               OGM_pon_init_error,
+                               OGM_dop_init_error,
+                               OGM_pop_init_error,
+                               NCS_ss1_init_error,
+                               PHS_frp_ads_init_error,
+                               PHY_TCHLA_init_error) 
+        
+      }else{
+        wq_var_error <- c(OXY_oxy_process_error)
+        
+        wq_var_init_error <- c(OXY_oxy_init_error) 
+      }
+      
       for(i in 1:num_wq_vars){
         for(j in 1:ndepths_modeled){
           qt <- rbind(qt, rep(0.0, ncol(qt)))
           qt <- cbind(qt, rep(0.0, nrow(qt)))
           qt[ncol(qt),nrow(qt)] <- wq_var_error[i]
+          
+          qt_init <- rbind(qt_init, rep(0.0, ncol(qt_init)))
+          qt_init <- cbind(qt_init, rep(0.0, nrow(qt_init)))
+          qt_init[ncol(qt_init),nrow(qt_init)] <- wq_var_init_error[i]
         }
       }
     }
-    resid30day <- array(NA, dim =c(30, nrow(qt)))
+    
+    running_residuals <- array(NA, dim =c(num_adapt_days, nrow(qt)))
+    
+    #Covariance matrix for parameters
+    if(npars > 0){
+      for(pars in 1:npars){
+        qt <- rbind(qt, rep(0.0, ncol(qt)))
+        qt <- cbind(qt, rep(0.0, nrow(qt)))
+        qt[ncol(qt),nrow(qt)] <- par_init_qt[pars]
+        
+        qt_init <- rbind(qt_init, rep(0.0, ncol(qt_init)))
+        qt_init <- cbind(qt_init, rep(0.0, nrow(qt)))
+        qt_init[ncol(qt_init),nrow(qt_init)] <- par_init_qt[pars]
+      }
+      qt_pars <- matrix(data = 0, nrow = npars, ncol = npars)
+      diag(qt_pars) <- par_init_qt
+    }else{
+      qt_pars <- NA
+    }
   }
-  #Covariance matrix for parameters
-  if(npars > 0){
-    qt_pars <- matrix(data = 0, nrow = npars, ncol = npars)
-    diag(qt_pars) <- c(zone1temp_init_qt, zone2temp_init_qt, swf_init_qt,kw_init_qt)
-  }else{
-    qt_pars <- NA
-  }
-  
   
   ################################################################
-  #### STEP 10: CREATE THE X ARRAY (STATES X TIME);INCLUDES INITIALATION
+  #### STEP 11: CREATE THE X ARRAY (STATES X TIME);INCLUDES INITIALATION
   ################################################################
-  nmembers <- n_enkf_members*n_met_members*n_ds_members
-  
+  nmembers <- ensemble_size
   
   x <- array(NA, dim=c(nsteps, nmembers, nstates + npars))
   
+  
+  
+  #Matrix to store essemble specific surface height
+  surface_height <- array(NA, dim=c(nsteps, nmembers))
+  snow_ice_thickness <- array(NA, dim=c(nsteps, nmembers, 3))
+  avg_surf_temp <- array(NA, dim=c(nsteps, nmembers))
+  
+  mixing_vars <- array(NA, dim=c(nmembers, 17))
+  
+  glm_depths <- array(NA, dim = c(nsteps, nmembers, 500))
+  
+  if(include_wq){
+    x_phyto_groups <- array(NA, dim = c(nsteps, nmembers, num_phytos * ndepths_modeled))
+  }else{
+    x_phyto_groups <- NA
+  }
   
   #Initial conditions
   if(!restart_present){
@@ -970,45 +1141,89 @@ run_flare<-function(start_day= "2018-07-06 00:00:00",
         x[1, ,1:nstates] <- rmvnorm(n=nmembers, 
                                     mean=c(the_temps_init, 
                                            wq_init_vals), 
-                                    sigma=as.matrix(qt))
-        x[1, ,(nstates+1)] <- runif(n=nmembers,zone1_temp_init_lowerbound, zone1_temp_init_upperbound)
-        x[1, ,(nstates+2)] <- runif(n=nmembers,zone2_temp_init_lowerbound, zone2_temp_init_upperbound)
-        x[1, ,(nstates+3)] <- runif(n=nmembers,swf_init_lowerbound, swf_init_upperbound)
-        x[1, ,(nstates+4)] <- rep(kw_init, nmembers) #runif(n=nmembers,0.5, 1.5)
-        if(initial_condition_uncertainty == FALSE){
+                                    sigma=as.matrix(qt_init[1:nstates,1:nstates]))
+        
+        if(single_run){
           for(m in 1:nmembers){
-            x[1,m, ] <- c(the_temps_init,
-                          wq_init_vals,
-                          zone1_temp_init_mean,
-                          zone2_temp_init_mean,
-                          swf_init_mean,
-                          kw_init)
+            x[1,m ,1:nstates] <- rep(c(the_temps_init, 
+                                       wq_init_vals))
           }
         }
-      }else{
-        x[1, , ] <- rmvnorm(n=nmembers, 
-                            mean=c(the_temps_init,wq_init_vals),
-                            sigma=as.matrix(qt))
-        if(initial_condition_uncertainty == FALSE){
+        if(include_wq){
           for(m in 1:nmembers){
-            x[1, m, ] <- c(the_temps_init, do_init, wq_init_vals)
+            index <- which(x[1,m,] < 0.0)
+            x[1, m, index[which(index < wq_end[num_wq_vars])]] <- 0.0
           }
+        }
+        
+        for(par in 1:npars){
+          x[1, ,(nstates+par)] <- runif(n=nmembers,par_init_lowerbound[par], par_init_upperbound[par])
+          if(single_run){
+            x[1, ,(nstates+par)] <-  rep(par_init_mean[par], nmembers)
+          }
+        }
+        
+        
+        if(initial_condition_uncertainty == FALSE & hist_days == 0){
+          state_means <- colMeans(x[1, , 1:nstates])
+          for(m in 1:nmembers){
+            x[1, m, ] <- state_means
+          }
+        }
+        
+        for(phyto in 1:num_phytos){
+          for(m in 1:nmembers){
+            x_phyto_groups[1, m , ((phyto-1)*ndepths_modeled + 1):(phyto*ndepths_modeled)] <- 
+              x[1, m,wq_start[num_wq_vars]:wq_end[num_wq_vars]] * 
+              biomass_to_chla[phyto] * init_phyto_proportion[phyto]
+          }
+        }
+        
+      }else{
+        x[1, ,1:nstates] <- rmvnorm(n=nmembers, 
+                                    mean=c(the_temps_init,wq_init_vals),
+                                    sigma=as.matrix(qt))
+        
+        if(single_run){
+          for(m in 1:nmembers){
+            x[1,m ,1:nstates] <- rep(c(the_temps_init, 
+                                       wq_init_vals))
+          }
+        }
+        
+        if(initial_condition_uncertainty == FALSE & hist_days == 0){
+          state_means <- colMeans(x[1, , 1:nstates])
+          for(m in 1:nmembers){
+            x[1, m, ] <- state_means
+          }
+        }
+      }
+      
+      for(phyto in 1:num_phytos){
+        for(m in 1:nmembers){
+          x_phyto_groups[1, m , ((phyto-1)*ndepths_modeled + 1):(phyto*ndepths_modeled)] <- 
+            x[1, m,wq_start[num_wq_vars]:wq_end[num_wq_vars]] *
+            biomass_to_chla[phyto] * 
+            init_phyto_proportion[phyto]
         }
       }
     }else{
       if(npars > 0){
         x[1, ,1:nstates] <- rmvnorm(n=nmembers, 
-                                    mean=the_temps_init,
-                                    sigma=as.matrix(qt))
+                                    mean=c(the_temps_init), 
+                                    sigma=as.matrix(qt_init[1:nstates,1:nstates]))
         
+        for(par in 1:npars){
+          x[1, ,(nstates+par)] <- runif(n=nmembers,par_init_lowerbound[par], par_init_upperbound[par])
+          if(single_run){
+            x[1, ,(nstates+par)] <- rep(par_init_mean[par], nmembers)
+          }
+        }
         
-        x[1, ,(nstates+1)] <- runif(n=nmembers,zone1_temp_init_lowerbound, zone1_temp_init_upperbound)
-        x[1, ,(nstates+2)] <- runif(n=nmembers,zone2_temp_init_lowerbound, zone2_temp_init_upperbound)
-        x[1, ,(nstates+3)] <- runif(n=nmembers,swf_init_lowerbound, swf_init_upperbound)
-        x[1, ,(nstates+4)] <- rep(kw_init, nmembers) #runif(n=nmembers,0.5, 1.5)
         if(initial_condition_uncertainty == FALSE){
+          state_means <- colMeans(x[1, , 1:nstates])
           for(m in 1:nmembers){
-            x[1, m, ] <- c(the_temps_init, zone1_temp_init_mean, zone2_temp_init_mean, swf_init_mean, kw_init)
+            x[1, m,1:nstates] <- state_means
           }
         }
       }else{
@@ -1016,11 +1231,10 @@ run_flare<-function(start_day= "2018-07-06 00:00:00",
                             mean=the_temps_init,
                             sigma=as.matrix(qt))
         
-        if(initial_condition_uncertainty == FALSE){
+        if(initial_condition_uncertainty == FALSE & hist_days == 0){
+          state_means <- colMeans(x[1, , 1:nstates])
           for(m in 1:nmembers){
-            if(npars > 0){
-              x[1, m, ] <- the_temps_init
-            }
+            x[1, m, ] <- state_means
           }
         }
       }
@@ -1028,16 +1242,16 @@ run_flare<-function(start_day= "2018-07-06 00:00:00",
     if(include_wq){
       for(m in 1:nmembers){
         for(wq in 1:num_wq_vars){
-          index <- which(x[1, m, ] < 0.0)
+          index <- which(x[1, m, 1:wq_end[num_wq_vars]] < 0.0)
           index <- index[which(index > wq_start[1])]
           x[1, m, index] <- 0.0
         }
       }
     }
-    write.csv(x[1, , ],paste0(working_glm, "/", "restart_",
-                              year(full_time[1]), "_",
-                              month(full_time[1]), "_",
-                              day(full_time[1]), "_cold.csv"),
+    write.csv(x[1, , ],paste0(working_directory, "/", "restart_",
+                              year(full_time_local[1]), "_",
+                              month(full_time_local[1]), "_",
+                              day(full_time_local[1]), "_cold.csv"),
               row.names = FALSE)
   }
   
@@ -1046,6 +1260,15 @@ run_flare<-function(start_day= "2018-07-06 00:00:00",
     print("Using restart file")
     nc <- nc_open(restart_file)
     restart_nmembers <- length(ncvar_get(nc, "ens"))
+    surface_height_restart <- ncvar_get(nc, "surface_height_restart")
+    snow_ice_thickness_restart <- ncvar_get(nc, "snow_ice_restart")
+    avg_surf_temp_restart <- ncvar_get(nc, "avg_surf_temp_restart")
+    mixing_restart <- ncvar_get(nc, "mixing_restart")
+    glm_depths_restart  <- ncvar_get(nc, "depths_restart")
+    
+    if(include_wq & "PHY_TCHLA" %in% wq_names){
+      x_phyto_groups_restart <- ncvar_get(nc, "phyto_restart")
+    }
     if(restart_nmembers > nmembers){
       #sample restart_nmembers
       sampled_nmembers <- sample(seq(1, restart_nmembers, 1),
@@ -1053,62 +1276,138 @@ run_flare<-function(start_day= "2018-07-06 00:00:00",
                                  replace=FALSE)
       restart_x_previous <- ncvar_get(nc, "x_restart")
       x_previous <- restart_x_previous[sampled_nmembers, ]
-      if(initial_condition_uncertainty == FALSE & hist_days == 0){
-        x_previous_1 <- colMeans(x_previous)
-        for(m in 1:nmembers){
-          x_previous[m, ] <- x_previous_1
+      
+      snow_ice_thickness[1, , 1] <- snow_ice_thickness_restart[sampled_nmembers, 1]
+      snow_ice_thickness[1, , 2] <- snow_ice_thickness_restart[sampled_nmembers, 2]
+      snow_ice_thickness[1, , 3] <- snow_ice_thickness_restart[sampled_nmembers, 3]
+      
+      surface_height[1, ] <- surface_height_restart[sampled_nmembers]
+      avg_surf_temp[1, ] <- avg_surf_temp_restart[sampled_nmembers]
+      mixing_vars <- mixing_restart[sampled_nmembers, ]
+      
+      
+      for(m in 1:nmembers){
+        glm_depths[1,m ,1:dim(glm_depths_restart)[2]] <- glm_depths_restart[sampled_nmembers[m], ]
+      }
+      
+      if(include_wq & "PHY_TCHLA" %in% wq_names){
+        for(phyto in 1:num_phytos){
+          x_phyto_groups[1, ,((phyto-1)*ndepths_modeled):(phyto*ndepths_modeled)] <- 
+            x_phyto_groups_restart[sampled_nmembers , ((phyto-1)*ndepths_modeled):(phyto*ndepths_modeled)]
         }
       }
+      
     }else if(restart_nmembers < nmembers){
       sampled_nmembers <- sample(seq(1, restart_nmembers, 1),
                                  nmembers,
                                  replace = TRUE)
       restart_x_previous <- ncvar_get(nc, "x_restart")
       x_previous <- restart_x_previous[sampled_nmembers, ]
-      if(initial_condition_uncertainty == FALSE & hist_days == 0){
-        x_previous_1 <- colMeans(x_previous)
-        for(m in 1:nmembers){
-          x_previous[m, ] <- x_previous_1
+      
+      snow_ice_thickness[1, ,1] <- snow_ice_thickness_restart[sampled_nmembers, 1]
+      snow_ice_thickness[1, ,2] <- snow_ice_thickness_restart[sampled_nmembers, 2]
+      snow_ice_thickness[1, ,3] <- snow_ice_thickness_restart[sampled_nmembers, 3]
+      
+      surface_height[1, ] <- surface_height_restart[sampled_nmembers]
+      avg_surf_temp[1, ] <- avg_surf_temp_restart[sampled_nmembers]
+      mixing_vars <- mixing_restart[sampled_nmembers, ]
+      
+      for(m in 1:nmembers){
+        glm_depths[1,m ,1:dim(glm_depths_restart)[2]] <- glm_depths_restart[sampled_nmembers[m], ]
+      }
+      
+      if(include_wq & "PHY_TCHLA" %in% wq_names){
+        for(phyto in 1:num_phytos){
+          x_phyto_groups[1, ,((phyto-1)*ndepths_modeled):(phyto*ndepths_modeled)] <- 
+            x_phyto_groups_restart[sampled_nmembers , ((phyto-1)*ndepths_modeled):(phyto*ndepths_modeled)]
         }
       }
+      
     }else{
-      x_previous <- ncvar_get(nc, "x_restart")   
-      if(initial_condition_uncertainty == FALSE & hist_days == 0){
-        x_previous_1 <- colMeans(x_previous) 
-        for(m in 1:nmembers){
-          x_previous[m, ] <- x_previous_1
+      restart_x_previous <- ncvar_get(nc, "x_restart")
+      x_previous <- restart_x_previous
+      snow_ice_thickness[1, ,1] <- snow_ice_thickness_restart[, 1]
+      snow_ice_thickness[1, ,2] <- snow_ice_thickness_restart[, 2]
+      snow_ice_thickness[1, ,3] <- snow_ice_thickness_restart[, 3]
+      
+      surface_height[1, ] <- surface_height_restart
+      avg_surf_temp[1, ] <- avg_surf_temp_restart
+      mixing_vars <- mixing_restart
+      
+      for(m in 1:nmembers){
+        glm_depths[1,m ,1:dim(glm_depths_restart)[2]] <- glm_depths_restart[m, ]
+      }
+      
+      if(include_wq & "PHY_TCHLA" %in% wq_names){
+        for(phyto in 1:num_phytos){
+          x_phyto_groups[1, ,((phyto-1)*ndepths_modeled):(phyto*ndepths_modeled)] <- 
+            x_phyto_groups_restart[ , ((phyto-1)*ndepths_modeled):(phyto*ndepths_modeled)]
         }
       }
+      
     }
     nc_close(nc)
   }else{
-    x_previous <- read.csv(paste0(working_glm, "/", "restart_",
-                                  year(full_time[1]), "_",
-                                  month(full_time[1]), "_",
-                                  day(full_time[1]), "_cold.csv"))
+    x_previous <- read.csv(paste0(working_directory, "/", "restart_",
+                                  year(full_time_local[1]), "_",
+                                  month(full_time_local[1]), "_",
+                                  day(full_time_local[1]), "_cold.csv"))
+    
+    
+    surface_height[1, ] <- round(lake_depth_init, 3)
+    
+    #Matrix to store snow and ice heights
+    snow_ice_thickness[1, ,1] <- default_snow_thickness_init
+    snow_ice_thickness[1, ,2] <- default_white_ice_thickness_init
+    snow_ice_thickness[1, ,3] <- default_blue_ice_thickness_init
+    
+    avg_surf_temp[1, ] <- x[1, ,1]
+    
+    mixing_vars[,] <- 0.0
+    
+    for(m in 1:nmembers){
+      glm_depths[1, m, 1:ndepths_modeled] <- modeled_depths
+    }
+    
   }
   
   #Set initial conditions
-  x[1,,] <- as.matrix(x_previous)
+  x[1, , ] <- as.matrix(x_previous)
   
-  #Matrix to store essemble specific surface height
-  surface_height <- array(NA, dim=c(nsteps, nmembers))
-  surface_height[1, ] <- lake_depth_init
+  #If hist_days = 0 then the first day of the simulation will be a forecast 
+  #therefre the the initial_condition_uncertainty and parameter_uncertainty 
+  #need to be dealt with in the x[1, ,] , normally it is dealt with in the 
+  #run_EnKF script
+  if(hist_days == 0){
+    if(initial_condition_uncertainty == FALSE){
+      states_mean <- colMeans(x[1, ,1:nstates])
+      for(m in 1:nmembers){
+        x[1, m, 1:nstates]  <- states_mean
+      }
+    }
+    if(parameter_uncertainty == FALSE){
+      mean_pars <- colMeans(x[1, ,(nstates + 1):(nstates + npars)])
+      for(m in 1:nmembers){
+        x[1, m, (nstates + 1):(nstates + npars)] <- mean_pars
+      }
+    }
+  }
   
-  
-  
+  management_input <- read_sss_files(full_time_local, 
+                                     sss_file = sss_fname)
   
   ####################################################
-  #### STEP 11: Run Ensemble Kalman Filter
+  #### STEP 12: Run Ensemble Kalman Filter
   ####################################################
   
   enkf_output <- run_EnKF(x,
                           z,
                           qt,
                           qt_pars,
-                          psi,
-                          full_time,
-                          working_glm,
+                          psi_slope,
+                          psi_intercept,
+                          full_time_local,
+                          working_directory,
                           npars,
                           modeled_depths,
                           surface_height,
@@ -1123,48 +1422,69 @@ run_flare<-function(start_day= "2018-07-06 00:00:00",
                           initial_condition_uncertainty,
                           parameter_uncertainty,
                           machine,
-                          resid30day,
                           hist_days,
-                          print_glm2screen)
+                          x_phyto_groups,
+                          inflow_file_names,
+                          outflow_file_names,
+                          management_input,
+                          forecast_sss_on,
+                          snow_ice_thickness,
+                          avg_surf_temp,
+                          running_residuals,
+                          the_sals_init,
+                          mixing_vars,
+                          glm_depths
+  )
   
   x <- enkf_output$x
   x_restart <- enkf_output$x_restart
   qt_restart <- enkf_output$qt_restart
   x_prior <- enkf_output$x_prior
-  resid30day <- enkf_output$resid30day
+  surface_height_restart <- enkf_output$surface_height_restart
+  snow_ice_restart <- enkf_output$snow_ice_restart
+  snow_ice_thickness <- enkf_output$snow_ice_thickness
+  surface_height <- enkf_output$surface_height
+  
+  x_phyto_groups_restart <- enkf_output$x_phyto_groups_restart
+  x_phyto_groups <- enkf_output$x_phyto_groups
+  running_residuals <- enkf_output$running_residuals
+  
+  avg_surf_temp_restart <- enkf_output$avg_surf_temp_restart
+  mixing_restart <- enkf_output$mixing_restart
+  glm_depths_restart <- enkf_output$glm_depths_restart
   
   ####################################################
-  #### STEP 12: PROCESS OUTPUT
+  #### STEP 13: PROCESS OUTPUT
   ####################################################
   
   ### CREATE FORECAST NAME
   
-  if(day(full_time[1]) < 10){
-    file_name_H_day <- paste0("0",day(full_time[1]))
+  if(day(full_time_local[1]) < 10){
+    file_name_H_day <- paste0("0",day(full_time_local[1]))
   }else{
-    file_name_H_day <- day(full_time[1]) 
+    file_name_H_day <- day(full_time_local[1]) 
   }
-  if(day(full_time[hist_days+1]) < 10){
-    file_name_F_day <- paste0("0",day(full_time[hist_days+1]))
+  if(day(full_time_local[hist_days+1]) < 10){
+    file_name_F_day <- paste0("0",day(full_time_local[hist_days+1]))
   }else{
-    file_name_F_day <- day(full_time[hist_days+1]) 
+    file_name_F_day <- day(full_time_local[hist_days+1]) 
   }
-  if(month(full_time[1]) < 10){
-    file_name_H_month <- paste0("0",month(full_time[1]))
+  if(month(full_time_local[1]) < 10){
+    file_name_H_month <- paste0("0",month(full_time_local[1]))
   }else{
-    file_name_H_month <- month(full_time[1]) 
+    file_name_H_month <- month(full_time_local[1]) 
   }
-  if(month(full_time[hist_days+1]) < 10){
-    file_name_F_month <- paste0("0",month(full_time[hist_days+1]))
+  if(month(full_time_local[hist_days+1]) < 10){
+    file_name_F_month <- paste0("0",month(full_time_local[hist_days+1]))
   }else{
-    file_name_F_month <- month(full_time[hist_days+1]) 
+    file_name_F_month <- month(full_time_local[hist_days+1]) 
   }
   
   save_file_name <- paste0(sim_name, "_H_",
-                           (year(full_time[1])),"_",
+                           (year(full_time_local[1])),"_",
                            file_name_H_month,"_",
                            file_name_H_day,"_",
-                           (year(full_time[hist_days+1])),"_",
+                           (year(full_time_local[hist_days+1])),"_",
                            file_name_F_month,"_",
                            file_name_F_day,"_F_",
                            forecast_days) 
@@ -1178,38 +1498,51 @@ run_flare<-function(start_day= "2018-07-06 00:00:00",
   
   
   ###SAVE FORECAST
-  write_forecast_netcdf(x = x,
-                        full_time = full_time_local,
-                        qt = qt,
-                        modeled_depths = modeled_depths,
-                        save_file_name = save_file_name,
-                        x_restart = x_restart,
-                        qt_restart = qt_restart,
-                        time_of_forecast = time_of_forecast,
-                        hist_days = hist_days,
+  write_forecast_netcdf(x,
+                        full_time_local,
+                        qt,
+                        modeled_depths,
+                        save_file_name,
+                        x_restart,
+                        qt_restart,
+                        time_of_forecast,
+                        hist_days,
                         x_prior,
                         include_wq,
                         wq_start,
                         wq_end,
-                        par1,
-                        par2,
-                        par3,
-                        par4,
                         z,
                         nstates,
                         npars,
                         GLMversion,
                         FLAREversion,
-                        resid30day)
+                        local_tzone,
+                        surface_height_restart,
+                        snow_ice_restart,
+                        snow_ice_thickness,
+                        surface_height,
+                        avg_surf_temp_restart,
+                        x_phyto_groups_restart,
+                        x_phyto_groups,
+                        running_residuals,
+                        mixing_restart,
+                        glm_depths_restart,
+                        forecast_location)
   
-  ##ARCHIVE FORECAST
-  restart_file_name <- archive_forecast(working_glm = working_glm,
-                                        folder = folder, 
+  #### END GLM ENKF CONTAINER ####
+  
+  
+  #### START ARCHIVE CONTAINER
+  
+  restart_file_name <- archive_forecast(working_directory = working_directory,
+                                        folder = code_folder, 
                                         forecast_base_name = forecast_base_name, 
                                         forecast_location = forecast_location,
                                         push_to_git = push_to_git,
                                         save_file_name = save_file_name, 
-                                        time_of_forecast = time_of_forecast)
+                                        time_of_forecast_string = time_of_forecast_string)
+  
+  #### END START ARCHIVE CONTAINER
   
   return(list(restart_file_name <- restart_file_name,
               sim_name <- paste0(save_file_name, "_", time_of_forecast_string)))

@@ -11,6 +11,9 @@ Encoding: UTF-8
 
 RnwWeave: Sweave
 LaTeX: pdfLaTeX
+<<<<<<< HEAD
 
 AutoAppendNewline: Yes
 StripTrailingWhitespace: Yes
+=======
+>>>>>>> 077ed23e6ac9d186dc3e559fe512cd41638b2c5f
